@@ -93,7 +93,7 @@ actor UniFiClient {
         let data = try await request("/proxy/network/v2/api/site/default/clients/active")
         let clients = try JSONDecoder().decode([V2ClientDTO].self, from: data)
 
-        guard let myIP = DeviceDetector.en0IPv4Address() else {
+        guard let myIP = DeviceDetector.activeIPv4Address() else {
             throw UniFiError.selfNotFound
         }
 

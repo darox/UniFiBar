@@ -1,21 +1,22 @@
 import Darwin
 
 enum DeviceDetector {
-    static func en0IPv4Address() -> String? {
+    /// Returns the IPv4 address of the first active `en*` interface (WiFi or Ethernet).
+    static func activeIPv4Address() -> String? {
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddr) == 0, let firstAddr = ifaddr else {
             return nil
         }
         defer { freeifaddrs(ifaddr) }
 
-        var address: String?
         var current: UnsafeMutablePointer<ifaddrs>? = firstAddr
 
         while let ifa = current {
             let name = String(cString: ifa.pointee.ifa_name)
             let family = ifa.pointee.ifa_addr.pointee.sa_family
 
-            if name == "en0" && family == UInt8(AF_INET) {
+            // Match any en* interface (en0 = WiFi, en1+ = Ethernet/Thunderbolt)
+            if name.hasPrefix("en") && family == UInt8(AF_INET) {
                 var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
                 let result = getnameinfo(
                     ifa.pointee.ifa_addr,
@@ -27,13 +28,16 @@ enum DeviceDetector {
                 )
                 if result == 0 {
                     let length = hostname.firstIndex(of: 0).map { Int($0) } ?? hostname.count
-                    address = String(decoding: hostname.prefix(length).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+                    let ip = String(decoding: hostname.prefix(length).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+                    // Skip link-local addresses (169.254.x.x)
+                    if !ip.hasPrefix("169.254") {
+                        return ip
+                    }
                 }
-                break
             }
             current = ifa.pointee.ifa_next
         }
 
-        return address
+        return nil
     }
 }

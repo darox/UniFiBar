@@ -178,4 +178,7 @@ struct SelfInfo: Sendable {
     let client: V2ClientDTO
     let totalClients: Int
     let clientsOnSameAP: Int
+
+    /// True when this Mac is connected via Ethernet (no AP association)
+    var isWired: Bool { client.apMac == nil }
 }

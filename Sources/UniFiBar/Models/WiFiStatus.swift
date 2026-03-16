@@ -53,6 +53,33 @@ final class WiFiStatus {
     // Session history
     var sessions: [SessionEntry]? = nil
 
+    // WAN status (from health endpoint)
+    var wanIsUp: Bool? = nil
+    var wanIP: String? = nil
+    var wanISP: String? = nil
+    var wanLatencyMs: Int? = nil
+    var wanAvailability: Double? = nil
+    var wanDrops: Int? = nil
+    var wanTxBytesRate: Double? = nil
+    var wanRxBytesRate: Double? = nil
+
+    // Gateway health
+    var gatewayCPU: Double? = nil
+    var gatewayMemory: Double? = nil
+    var gatewayUptime: Int? = nil
+    var gatewayName: String? = nil
+
+    // VPN tunnels
+    var vpnTunnels: [VPNTunnelDTO]? = nil
+
+    // Firmware
+    var devicesWithUpdates: [String]? = nil
+
+    // Device overview
+    var totalDevices: Int? = nil
+    var onlineDevices: Int? = nil
+    var offlineDeviceNames: [String]? = nil
+
     // Metadata
     var lastUpdated: Date? = nil
 
@@ -134,6 +161,54 @@ final class WiFiStatus {
     var formattedAPLoad: String? {
         guard let cpu = apCPU, let mem = apMemory else { return nil }
         return "CPU \(Int(cpu))% · Mem \(Int(mem))%"
+    }
+
+    var formattedGatewayLoad: String? {
+        guard let cpu = gatewayCPU, let mem = gatewayMemory else { return nil }
+        return "CPU \(Int(cpu))% · Mem \(Int(mem))%"
+    }
+
+    var formattedGatewayUptime: String? {
+        guard let secs = gatewayUptime, secs > 0 else { return nil }
+        let days = secs / 86400
+        let hours = (secs % 86400) / 3600
+        if days > 0 { return "\(days)d \(hours)h" }
+        let minutes = (secs % 3600) / 60
+        return "\(hours)h \(minutes)m"
+    }
+
+    var formattedWANThroughput: String? {
+        guard let tx = wanTxBytesRate, let rx = wanRxBytesRate,
+              tx > 0 || rx > 0 else { return nil }
+        return "↓ \(formatBytesPerSec(rx)) ↑ \(formatBytesPerSec(tx))"
+    }
+
+    var formattedWANLatency: String? {
+        guard let ms = wanLatencyMs else { return nil }
+        return "\(ms) ms"
+    }
+
+    var formattedWANAvailability: String? {
+        guard let pct = wanAvailability else { return nil }
+        if pct == 100 {
+            return "100%"
+        }
+        return String(format: "%.1f%%", pct)
+    }
+
+    var formattedDeviceOverview: String? {
+        guard let total = totalDevices, let online = onlineDevices else { return nil }
+        if online == total {
+            return "\(total) device\(total == 1 ? "" : "s") · all online"
+        }
+        let offline = total - online
+        return "\(online) online · \(offline) offline"
+    }
+
+    var firmwareBadge: String? {
+        guard let names = devicesWithUpdates, !names.isEmpty else { return nil }
+        let count = names.count
+        return "\(count) device\(count == 1 ? "" : "s") update available"
     }
 
     var formattedNetworkOverview: String? {
@@ -226,6 +301,60 @@ final class WiFiStatus {
         apMemory = stats?.memoryUtilizationPct
     }
 
+    func updateWANHealth(_ health: WANHealth?) {
+        if let health {
+            wanIsUp = health.status == "ok"
+            wanIP = health.wanIP
+            wanISP = health.ispName
+            wanLatencyMs = health.latencyMs
+            wanAvailability = health.availability
+            wanDrops = (health.drops ?? 0) > 0 ? health.drops : nil
+            wanTxBytesRate = health.txBytesRate
+            wanRxBytesRate = health.rxBytesRate
+        } else {
+            wanIsUp = nil
+            wanIP = nil
+            wanISP = nil
+            wanLatencyMs = nil
+            wanAvailability = nil
+            wanDrops = nil
+            wanTxBytesRate = nil
+            wanRxBytesRate = nil
+        }
+    }
+
+    func updateGateway(_ stats: GatewayStats?, device: DeviceDTO?) {
+        // WAN status now comes from health endpoint via updateWANHealth()
+        // Gateway only handles device-level stats
+        gatewayCPU = stats?.cpuUtilizationPct
+        gatewayMemory = stats?.memoryUtilizationPct
+        gatewayUptime = stats?.uptimeSec
+        gatewayName = device?.name
+    }
+
+    func updateVPN(_ tunnels: [VPNTunnelDTO]?) {
+        vpnTunnels = (tunnels?.isEmpty == true) ? nil : tunnels
+    }
+
+    func updateDevices(_ devices: [DeviceDTO]) {
+        guard !devices.isEmpty else {
+            totalDevices = nil
+            onlineDevices = nil
+            offlineDeviceNames = nil
+            devicesWithUpdates = nil
+            return
+        }
+
+        totalDevices = devices.count
+        onlineDevices = devices.filter(\.isOnline).count
+
+        let offline = devices.filter { !$0.isOnline }
+        offlineDeviceNames = offline.isEmpty ? nil : offline.compactMap(\.name)
+
+        let updatable = devices.filter { $0.firmwareUpdatable == true }
+        devicesWithUpdates = updatable.isEmpty ? nil : updatable.compactMap(\.name)
+    }
+
     func updateSessions(_ dtos: [SessionDTO]?, devices: [DeviceDTO]) {
         guard let dtos, !dtos.isEmpty else {
             sessions = nil
@@ -273,6 +402,17 @@ final class WiFiStatus {
             return String(format: "%.2f Gbps", mbps / 1000.0)
         }
         return String(format: "%.0f Mbps", mbps)
+    }
+
+    private func formatBytesPerSec(_ bytesPerSec: Double) -> String {
+        if bytesPerSec >= 1_073_741_824 {
+            return String(format: "%.1f GB/s", bytesPerSec / 1_073_741_824)
+        } else if bytesPerSec >= 1_048_576 {
+            return String(format: "%.1f MB/s", bytesPerSec / 1_048_576)
+        } else if bytesPerSec >= 1_024 {
+            return String(format: "%.0f KB/s", bytesPerSec / 1_024)
+        }
+        return "0 B/s"
     }
 
     private func formatBytes(_ bytes: Int) -> String {

@@ -1,10 +1,10 @@
 import SwiftUI
 
-struct ConnectionSection: View {
+struct SignalSection: View {
     let wifiStatus: WiFiStatus
 
     var body: some View {
-        SectionHeader(title: "Connection")
+        SubSectionHeader(title: "Signal")
 
         // RSSI with trend
         HStack(spacing: 6) {
@@ -29,6 +29,14 @@ struct ConnectionSection: View {
         if let noise = wifiStatus.noiseFloor {
             MetricRow(label: "Noise Floor", value: "\(noise) dBm", systemImage: "waveform.path")
         }
+    }
+}
+
+struct AccessPointSection: View {
+    let wifiStatus: WiFiStatus
+
+    var body: some View {
+        SubSectionHeader(title: "Access Point")
 
         if let apName = wifiStatus.apName {
             let networkSuffix = wifiStatus.essid.map { "  (\($0))" } ?? ""
@@ -37,13 +45,8 @@ struct ConnectionSection: View {
             MetricRow(label: "Network", value: essid, systemImage: "wifi.router")
         }
 
-        // Roam indicator
-        if wifiStatus.recentlyRoamed, let from = wifiStatus.roamedFrom {
-            MetricRow(label: "Roamed from", value: from, systemImage: "arrow.triangle.swap")
-        }
-
         if let apLoad = wifiStatus.formattedAPLoad {
-            MetricRow(label: "AP Load", value: apLoad, systemImage: "cpu")
+            MetricRow(label: "Load", value: apLoad, systemImage: "cpu")
         }
 
         if let channel = wifiStatus.channel {
@@ -54,33 +57,11 @@ struct ConnectionSection: View {
             MetricRow(label: "Standard", value: standardDescription(standard), systemImage: "cellularbars")
         }
 
-        MetricRow(label: "Rx", value: wifiStatus.formattedRxRate, systemImage: "arrow.down")
-        MetricRow(label: "Tx", value: wifiStatus.formattedTxRate, systemImage: "arrow.up")
-
-        if let sessionData = wifiStatus.formattedSessionData {
-            MetricRow(label: "Data", value: sessionData, systemImage: "chart.bar")
-        }
-
-        if let ip = wifiStatus.ip {
-            MetricRow(label: "IP", value: ip, systemImage: "network")
-        }
-
-        if let uptime = wifiStatus.uptime, uptime > 0 {
-            MetricRow(label: "Uptime", value: wifiStatus.formattedUptime, systemImage: "timer")
-        }
-
-        if let roamCountText = wifiStatus.formattedRoamCount {
-            MetricRow(label: "Roams", value: roamCountText, systemImage: "repeat")
-        }
-
-        // Network overview
-        if let overview = wifiStatus.formattedNetworkOverview {
-            SectionHeader(title: "Network")
-            MetricRow(label: "Clients", value: overview, systemImage: "person.2")
+        // Roam indicator
+        if wifiStatus.recentlyRoamed, let from = wifiStatus.roamedFrom {
+            MetricRow(label: "Roamed from", value: from, systemImage: "arrow.triangle.swap")
         }
     }
-
-    // MARK: - Helpers
 
     private func channelDescription(_ channel: Int) -> String {
         let band = channel > 14 ? "5 GHz" : "2.4 GHz"
@@ -96,5 +77,66 @@ struct ConnectionSection: View {
             return "\(standard) · \(mimo) MIMO"
         }
         return standard
+    }
+}
+
+struct LinkSection: View {
+    let wifiStatus: WiFiStatus
+
+    var body: some View {
+        SubSectionHeader(title: "Link")
+
+        MetricRow(label: "Rx", value: wifiStatus.formattedRxRate, systemImage: "arrow.down")
+        MetricRow(label: "Tx", value: wifiStatus.formattedTxRate, systemImage: "arrow.up")
+
+        if let sessionData = wifiStatus.formattedSessionData {
+            MetricRow(label: "Data", value: sessionData, systemImage: "chart.bar")
+        }
+    }
+}
+
+struct SessionSection: View {
+    let wifiStatus: WiFiStatus
+
+    var body: some View {
+        SubSectionHeader(title: "Session")
+
+        if let ip = wifiStatus.ip {
+            MetricRow(label: "IP", value: ip, systemImage: "network")
+        }
+
+        if let uptime = wifiStatus.uptime, uptime > 0 {
+            MetricRow(label: "Uptime", value: wifiStatus.formattedUptime, systemImage: "timer")
+        }
+
+        if let roamCountText = wifiStatus.formattedRoamCount {
+            MetricRow(label: "Roams", value: roamCountText, systemImage: "repeat")
+        }
+    }
+}
+
+struct NetworkSection: View {
+    let wifiStatus: WiFiStatus
+
+    var body: some View {
+        SectionHeader(title: "Network")
+
+        if let overview = wifiStatus.formattedNetworkOverview {
+            MetricRow(label: "Clients", value: overview, systemImage: "person.2")
+        }
+
+        if let deviceOverview = wifiStatus.formattedDeviceOverview {
+            MetricRow(label: "Devices", value: deviceOverview, systemImage: "desktopcomputer")
+        }
+
+        if let offlineNames = wifiStatus.offlineDeviceNames {
+            ForEach(offlineNames, id: \.self) { name in
+                MetricRow(label: name, value: "offline", systemImage: "exclamationmark.circle")
+            }
+        }
+
+        if let badge = wifiStatus.firmwareBadge {
+            MetricRow(label: "Firmware", value: badge, systemImage: "arrow.down.circle")
+        }
     }
 }

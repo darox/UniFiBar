@@ -36,12 +36,28 @@ struct MenuContentView: View {
 
     @ViewBuilder
     private var connectedView: some View {
-        WiFiExperienceSection(wifiStatus: controller.wifiStatus)
-        ConnectionSection(wifiStatus: controller.wifiStatus)
+        // Internet — WAN status, throughput, gateway
+        if controller.wifiStatus.wanIsUp != nil {
+            InternetSection(wifiStatus: controller.wifiStatus)
+        }
 
+        // VPN tunnels
+        if let tunnels = controller.wifiStatus.vpnTunnels {
+            VPNSection(tunnels: tunnels)
+        }
+
+        // WiFi — experience, signal, AP, link, session, session history
+        WiFiExperienceSection(wifiStatus: controller.wifiStatus)
+        SignalSection(wifiStatus: controller.wifiStatus)
+        AccessPointSection(wifiStatus: controller.wifiStatus)
+        LinkSection(wifiStatus: controller.wifiStatus)
+        SessionSection(wifiStatus: controller.wifiStatus)
         if let sessions = controller.wifiStatus.sessions {
             SessionTimeSection(sessions: sessions)
         }
+
+        // Network — clients, devices, firmware
+        NetworkSection(wifiStatus: controller.wifiStatus)
 
         if let lastUpdated = controller.wifiStatus.lastUpdated {
             Text("Last updated: \(lastUpdated.formatted(date: .omitted, time: .standard))")

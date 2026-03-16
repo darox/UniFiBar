@@ -150,6 +150,45 @@ actor UniFiClient {
         }
         return try JSONDecoder().decode([DeviceDTO].self, from: data)
     }
+
+    // MARK: - VPN Tunnels
+
+    func fetchVPNTunnels() async -> [VPNTunnelDTO]? {
+        do {
+            let id = try await fetchSiteId()
+            let data = try await request("/proxy/network/integrations/v1/sites/\(id)/vpn/tunnels")
+            let response = try JSONDecoder().decode(VPNTunnelResponse.self, from: data)
+            return response.data.isEmpty ? nil : response.data
+        } catch {
+            return nil
+        }
+    }
+
+    // MARK: - WAN Health (legacy stat/health)
+
+    func fetchWANHealth() async -> WANHealth? {
+        do {
+            let data = try await request("/proxy/network/api/s/default/stat/health")
+            let response = try JSONDecoder().decode(WANHealthResponse.self, from: data)
+            return response.toWANHealth()
+        } catch {
+            return nil
+        }
+    }
+
+    // MARK: - Gateway Statistics
+
+    func fetchGatewayStats(deviceId: String, siteId: String) async -> GatewayStats? {
+        do {
+            let data = try await request(
+                "/proxy/network/integrations/v1/sites/\(siteId)/devices/\(deviceId)/statistics/latest"
+            )
+            let response = try JSONDecoder().decode(GatewayStatsResponse.self, from: data)
+            return response.toGatewayStats
+        } catch {
+            return nil
+        }
+    }
 }
 
 // MARK: - Self-Signed Certificate Delegate

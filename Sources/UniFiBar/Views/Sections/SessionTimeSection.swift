@@ -4,7 +4,7 @@ struct SessionTimeSection: View {
     let sessions: [WiFiStatus.SessionEntry]
 
     var body: some View {
-        SectionHeader(title: "Session Time (Today)")
+        SubSectionHeader(title: "Session Time (Today)")
 
         ForEach(sessions) { session in
             HStack(spacing: 8) {

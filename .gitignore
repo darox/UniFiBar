@@ -1,0 +1,17 @@
+.build/
+.DS_Store
+*.xcodeproj
+DerivedData/
+.swiftpm/
+/tmp/
+unifbar-debug.log
+
+# Debug scripts with credential access
+Scripts/api_debug.swift
+
+# Claude/AI tooling
+BRIEF.md
+CLAUDE.md
+SKILLS_SETUP.md
+tasks/
+.claude/

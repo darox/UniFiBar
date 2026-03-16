@@ -123,29 +123,27 @@ struct MenuContentView: View {
 
     @ViewBuilder
     private var footerActions: some View {
-        Button {
-            controller.refreshNow()
-        } label: {
-            Label("Refresh Now", systemImage: "arrow.clockwise")
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 2)
+        HStack(spacing: 8) {
+            Button {
+                controller.refreshNow()
+            } label: {
+                Label("Refresh", systemImage: "arrow.clockwise")
+                    .frame(maxWidth: .infinity)
+            }
 
-        Button {
-            activateAndOpenWindow("preferences")
-        } label: {
-            Label("Preferences...", systemImage: "gearshape")
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 2)
+            Button {
+                activateAndOpenWindow("preferences")
+            } label: {
+                Label("Preferences", systemImage: "gearshape")
+                    .frame(maxWidth: .infinity)
+            }
 
-        Divider()
-            .padding(.vertical, 4)
-
-        Button {
-            NSApplication.shared.terminate(nil)
-        } label: {
-            Label("Quit UniFiBar", systemImage: "xmark")
+            Button {
+                NSApplication.shared.terminate(nil)
+            } label: {
+                Label("Quit", systemImage: "xmark")
+                    .frame(maxWidth: .infinity)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 2)

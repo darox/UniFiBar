@@ -143,8 +143,9 @@ final class StatusBarController {
 
         let me = selfInfo.client
 
-        // Fetch devices (needed for session AP names and AP stats)
+        // Fetch devices (needed for session AP names, AP stats, gateway, firmware)
         let devices = (try? await client.fetchDevices()) ?? []
+        wifiStatus.updateDevices(devices)
 
         // Fetch session history
         if let mac = me.mac {
@@ -165,5 +166,23 @@ final class StatusBarController {
         } else {
             wifiStatus.updateAPStats(nil)
         }
+
+        // WAN health from legacy stat/health endpoint
+        let wanHealth = await client.fetchWANHealth()
+        wifiStatus.updateWANHealth(wanHealth)
+
+        // Gateway health — find gateway device by model or by gw_mac from v2 client
+        let gwDevice = devices.first(where: \.isGateway)
+            ?? devices.first(where: { $0.mac?.lowercased() == me.gwMac?.lowercased() })
+        if let gwId = gwDevice?.id, let siteId = preferences.siteId {
+            let gwStats = await client.fetchGatewayStats(deviceId: gwId, siteId: siteId)
+            wifiStatus.updateGateway(gwStats, device: gwDevice)
+        } else {
+            wifiStatus.updateGateway(nil, device: gwDevice)
+        }
+
+        // VPN tunnels
+        let tunnels = await client.fetchVPNTunnels()
+        wifiStatus.updateVPN(tunnels)
     }
 }

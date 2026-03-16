@@ -4,7 +4,7 @@ struct WiFiExperienceSection: View {
     let wifiStatus: WiFiStatus
 
     var body: some View {
-        SectionHeader(title: "WiFi Experience")
+        SectionHeader(title: "WiFi")
 
         VStack(alignment: .leading, spacing: 6) {
             HStack {

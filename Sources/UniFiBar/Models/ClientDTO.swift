@@ -46,10 +46,12 @@ struct V2ClientDTO: Decodable, Sendable {
     let mimo: String?
     let roamCount: Int?
     let ccq: Int?
+    let gwMac: String?
 
     enum CodingKeys: String, CodingKey {
         case mac, ip, hostname, signal, rssi, noise, satisfaction, channel, radio, essid, uptime, ccq
         case displayName = "display_name"
+        case gwMac = "gw_mac"
         case wifiExperienceScore = "wifi_experience_score"
         case wifiExperienceAverage = "wifi_experience_average"
         case wifiTxRetriesPercentage = "wifi_tx_retries_percentage"

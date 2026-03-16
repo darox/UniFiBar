@@ -1,3 +1,4 @@
+import ServiceManagement
 import SwiftUI
 
 struct PreferencesView: View {
@@ -7,6 +8,7 @@ struct PreferencesView: View {
     @State private var controllerURL = ""
     @State private var apiKey = ""
     @State private var allowSelfSigned = false
+    @State private var launchAtLogin = false
     @State private var isLoading = true
     @State private var showResetConfirmation = false
     @State private var errorMessage: String?
@@ -39,6 +41,12 @@ struct PreferencesView: View {
 
                     Toggle("Allow self-signed certificates", isOn: $allowSelfSigned)
                         .font(.callout)
+
+                    Toggle("Launch at login", isOn: $launchAtLogin)
+                        .font(.callout)
+                        .onChange(of: launchAtLogin) { _, newValue in
+                            setLaunchAtLogin(newValue)
+                        }
 
                     if let siteId = controller.preferences.siteId {
                         HStack {
@@ -101,6 +109,7 @@ struct PreferencesView: View {
             apiKey = key
         }
         allowSelfSigned = controller.preferences.allowSelfSignedCerts
+        launchAtLogin = SMAppService.mainApp.status == .enabled
         isLoading = false
     }
 
@@ -131,5 +140,17 @@ struct PreferencesView: View {
         await controller.preferences.resetAll()
         controller.stopPolling()
         dismiss()
+    }
+
+    private func setLaunchAtLogin(_ enabled: Bool) {
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {
+            launchAtLogin = SMAppService.mainApp.status == .enabled
+        }
     }
 }

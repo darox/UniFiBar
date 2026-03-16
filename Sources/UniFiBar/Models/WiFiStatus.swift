@@ -5,6 +5,7 @@ import SwiftUI
 @Observable
 final class WiFiStatus {
     var isConnected: Bool = false
+    var isWired: Bool = false
     var errorState: ErrorState? = nil
 
     // WiFi Experience
@@ -121,6 +122,7 @@ final class WiFiStatus {
     }
 
     var statusBarColor: Color {
+        if isConnected && isWired { return .blue }
         guard isConnected, let satisfaction else { return .gray }
         switch satisfaction {
         case 80...100: return .green
@@ -131,6 +133,7 @@ final class WiFiStatus {
 
     var statusBarSymbol: String {
         guard isConnected else { return "wifi.slash" }
+        if isWired { return "cable.connector.horizontal" }
         guard let satisfaction, satisfaction >= 50 else { return "wifi.exclamationmark" }
         return "wifi"
     }
@@ -238,6 +241,7 @@ final class WiFiStatus {
     func update(from info: SelfInfo) {
         let client = info.client
         isConnected = true
+        isWired = info.isWired
         errorState = nil
         ip = client.ip
         wifiExperienceAverage = client.wifiExperienceAverage
@@ -381,6 +385,7 @@ final class WiFiStatus {
 
     func markDisconnected() {
         isConnected = false
+        isWired = false
         errorState = .notConnected
         satisfaction = nil
         signal = nil

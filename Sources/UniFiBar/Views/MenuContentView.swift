@@ -46,14 +46,33 @@ struct MenuContentView: View {
             VPNSection(tunnels: tunnels)
         }
 
-        // WiFi — experience, signal, AP, link, session, session history
-        WiFiExperienceSection(wifiStatus: controller.wifiStatus)
-        SignalSection(wifiStatus: controller.wifiStatus)
-        AccessPointSection(wifiStatus: controller.wifiStatus)
-        LinkSection(wifiStatus: controller.wifiStatus)
-        SessionSection(wifiStatus: controller.wifiStatus)
-        if let sessions = controller.wifiStatus.sessions {
-            SessionTimeSection(sessions: sessions)
+        if controller.wifiStatus.isWired {
+            // Wired connection — show Ethernet indicator, skip WiFi sections
+            SectionHeader(title: "Connection")
+            HStack(spacing: 6) {
+                Image(systemName: "cable.connector.horizontal")
+                    .foregroundStyle(.blue)
+                    .frame(width: 20, alignment: .center)
+                Text("Connected via Ethernet")
+                    .foregroundStyle(.primary)
+            }
+            .font(.callout)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 1)
+
+            if let ip = controller.wifiStatus.ip {
+                MetricRow(label: "IP", value: ip, systemImage: "network")
+            }
+        } else {
+            // WiFi — experience, signal, AP, link, session, session history
+            WiFiExperienceSection(wifiStatus: controller.wifiStatus)
+            SignalSection(wifiStatus: controller.wifiStatus)
+            AccessPointSection(wifiStatus: controller.wifiStatus)
+            LinkSection(wifiStatus: controller.wifiStatus)
+            SessionSection(wifiStatus: controller.wifiStatus)
+            if let sessions = controller.wifiStatus.sessions {
+                SessionTimeSection(sessions: sessions)
+            }
         }
 
         // Network — clients, devices, firmware

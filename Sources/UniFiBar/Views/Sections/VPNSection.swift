@@ -12,7 +12,7 @@ struct VPNSection: View {
                 Image(systemName: connected ? "lock.shield" : "lock.slash")
                     .foregroundStyle(connected ? .green : .red)
                     .frame(width: 20, alignment: .center)
-                Text(tunnel.name ?? tunnel.id)
+                Text(String((tunnel.name ?? tunnel.id).prefix(128)))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Spacer()

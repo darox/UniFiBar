@@ -394,34 +394,37 @@ final class PinnedCertDelegate: NSObject, URLSessionDelegate, Sendable {
         }
 
         // Extract public key hash from server certificate
-        // If extraction fails, still allow connection (user opted into self-signed)
+        // If extraction fails, reject — a cert we can't fingerprint is not trustworthy
         guard let serverKeyHash = Self.publicKeyHash(from: serverTrust) else {
-            return (.useCredential, URLCredential(trust: serverTrust))
-        }
-
-        let currentState = state.withLock { $0 }
-
-        switch currentState {
-        case .pinned(let storedHash):
-            if serverKeyHash == storedHash {
-                // Pin matches — allow connection
-                return (.useCredential, URLCredential(trust: serverTrust))
-            } else {
-                // Pin MISMATCH — reject connection (possible MITM)
-                state.withLock { $0 = .mismatch }
-                return (.cancelAuthenticationChallenge, nil)
-            }
-
-        case .unpinned:
-            // Trust-on-first-use: pin the key in Keychain
-            state.withLock { $0 = .pinned(serverKeyHash) }
-            Self.savePinToKeychain(key: keychainKey, data: serverKeyHash)
-            return (.useCredential, URLCredential(trust: serverTrust))
-
-        case .mismatch:
-            // Already in mismatch state — keep rejecting
             return (.cancelAuthenticationChallenge, nil)
         }
+
+        // Atomic read-check-write to prevent race between concurrent TLS challenges
+        let decision: (URLSession.AuthChallengeDisposition, URLCredential?) = state.withLock { currentState in
+            switch currentState {
+            case .pinned(let storedHash):
+                if serverKeyHash == storedHash {
+                    return (.useCredential, URLCredential(trust: serverTrust))
+                } else {
+                    currentState = .mismatch
+                    return (.cancelAuthenticationChallenge, nil)
+                }
+
+            case .unpinned:
+                currentState = .pinned(serverKeyHash)
+                return (.useCredential, URLCredential(trust: serverTrust))
+
+            case .mismatch:
+                return (.cancelAuthenticationChallenge, nil)
+            }
+        }
+
+        // Persist pin to Keychain outside the lock (only on first pin)
+        if case .pinned = state.withLock({ $0 }) {
+            Self.savePinToKeychain(key: keychainKey, data: serverKeyHash)
+        }
+
+        return decision
     }
 
     /// Extracts SHA-256 hash of the public key from a server trust.
@@ -454,20 +457,22 @@ final class PinnedCertDelegate: NSObject, URLSessionDelegate, Sendable {
     }
 
     private static func savePinToKeychain(key: String, data: Data) {
-        let query: [String: Any] = [
+        // Delete any existing item first to ensure kSecAttrAccessible is always set correctly
+        // (SecItemUpdate cannot change the accessibility attribute of existing items)
+        let deleteQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "com.unifbar.cert-pins",
             kSecAttrAccount as String: key,
         ]
-        // Try update first
-        let update: [String: Any] = [kSecValueData as String: data]
-        let updateStatus = SecItemUpdate(query as CFDictionary, update as CFDictionary)
-        if updateStatus == errSecSuccess { return }
+        SecItemDelete(deleteQuery as CFDictionary)
 
-        // Add new item
-        var addQuery = query
-        addQuery[kSecValueData as String] = data
-        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        let addQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "com.unifbar.cert-pins",
+            kSecAttrAccount as String: key,
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+        ]
         SecItemAdd(addQuery as CFDictionary, nil)
     }
 

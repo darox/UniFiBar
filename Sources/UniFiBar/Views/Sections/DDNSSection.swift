@@ -12,7 +12,7 @@ struct DDNSSection: View {
                         .frame(width: 20, alignment: .center)
                     VStack(alignment: .leading, spacing: 1) {
                         if let hostname = ddns.hostname {
-                            Text(hostname)
+                            Text(String(hostname.prefix(128)))
                                 .font(.callout)
                                 .foregroundStyle(.primary)
                                 .lineLimit(1)

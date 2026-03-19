@@ -34,20 +34,45 @@ struct MenuContentView: View {
 
     // MARK: - Connected View
 
+    private var prefs: PreferencesManager { controller.preferences }
+    private var status: WiFiStatus { controller.wifiStatus }
+
     @ViewBuilder
     private var connectedView: some View {
-        // Internet — WAN status, throughput, gateway
-        if controller.wifiStatus.wanIsUp != nil {
-            InternetSection(wifiStatus: controller.wifiStatus)
+        coreSections
+        monitoringSections
+        footerTimestamp
+    }
+
+    // MARK: - Core sections (Internet, VPN, WiFi/Connection, Session History, Network)
+
+    @ViewBuilder
+    private var coreSections: some View {
+        if prefs.isSectionEnabled(.internet), status.wanIsUp != nil {
+            InternetSection(wifiStatus: status)
         }
 
-        // VPN tunnels
-        if let tunnels = controller.wifiStatus.vpnTunnels {
+        if prefs.isSectionEnabled(.vpn), let tunnels = status.vpnTunnels {
             VPNSection(tunnels: tunnels)
         }
 
-        if controller.wifiStatus.isWired {
-            // Wired connection — show Ethernet indicator, skip WiFi sections
+        if prefs.isSectionEnabled(.wifi) {
+            connectionContent
+        }
+
+        if prefs.isSectionEnabled(.sessionHistory), !status.isWired,
+           let sessions = status.sessions {
+            SessionTimeSection(sessions: sessions)
+        }
+
+        if prefs.isSectionEnabled(.network) {
+            NetworkSection(wifiStatus: status)
+        }
+    }
+
+    @ViewBuilder
+    private var connectionContent: some View {
+        if status.isWired {
             SectionHeader(title: "Connection")
             HStack(spacing: 6) {
                 Image(systemName: "cable.connector.horizontal")
@@ -60,25 +85,55 @@ struct MenuContentView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 1)
 
-            if let ip = controller.wifiStatus.ip {
+            if let ip = status.ip {
                 MetricRow(label: "IP", value: ip, systemImage: "network")
             }
         } else {
-            // WiFi — experience, signal, AP, link, session, session history
-            WiFiExperienceSection(wifiStatus: controller.wifiStatus)
-            SignalSection(wifiStatus: controller.wifiStatus)
-            AccessPointSection(wifiStatus: controller.wifiStatus)
-            LinkSection(wifiStatus: controller.wifiStatus)
-            SessionSection(wifiStatus: controller.wifiStatus)
-            if let sessions = controller.wifiStatus.sessions {
-                SessionTimeSection(sessions: sessions)
-            }
+            WiFiExperienceSection(wifiStatus: status)
+            SignalSection(wifiStatus: status)
+            AccessPointSection(wifiStatus: status)
+            LinkSection(wifiStatus: status)
+            SessionSection(wifiStatus: status)
+        }
+    }
+
+    // MARK: - Monitoring sections (Alerts, Security, Traffic, Events, DDNS, Port Forwards, Nearby APs)
+
+    @ViewBuilder
+    private var monitoringSections: some View {
+        if prefs.isSectionEnabled(.alerts), let alarms = status.activeAlarms {
+            AlertsSection(alarms: alarms)
         }
 
-        // Network — clients, devices, firmware
-        NetworkSection(wifiStatus: controller.wifiStatus)
+        if prefs.isSectionEnabled(.security),
+           (status.ipsEvents != nil) || (status.anomalies != nil) {
+            SecuritySection(ipsEvents: status.ipsEvents, anomalies: status.anomalies)
+        }
 
-        if let lastUpdated = controller.wifiStatus.lastUpdated {
+        if prefs.isSectionEnabled(.traffic), let categories = status.dpiCategories {
+            TrafficSection(categories: categories)
+        }
+
+        if prefs.isSectionEnabled(.events), let events = status.siteEvents {
+            EventsSection(events: events)
+        }
+
+        if prefs.isSectionEnabled(.ddns), let ddns = status.ddnsStatuses {
+            DDNSSection(statuses: ddns)
+        }
+
+        if prefs.isSectionEnabled(.portForwards), let pf = status.portForwards {
+            PortForwardsSection(portForwards: pf)
+        }
+
+        if prefs.isSectionEnabled(.nearbyAPs), let aps = status.nearbyAPs {
+            NearbyAPsSection(rogueAPs: aps)
+        }
+    }
+
+    @ViewBuilder
+    private var footerTimestamp: some View {
+        if let lastUpdated = status.lastUpdated {
             Text("Last updated: \(lastUpdated.formatted(date: .omitted, time: .standard))")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)

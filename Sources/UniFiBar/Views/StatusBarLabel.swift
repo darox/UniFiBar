@@ -16,6 +16,11 @@ struct StatusBarLabel: View {
                 Text("\(satisfaction)%")
                     .monospacedDigit()
             }
+            if controller.wifiStatus.activeAlarmCount > 0 {
+                Image(systemName: "bell.badge.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
         }
         .task {
             await controller.start()

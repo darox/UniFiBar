@@ -82,6 +82,19 @@ final class WiFiStatus {
     var onlineDevices: Int? = nil
     var offlineDeviceNames: [String]? = nil
 
+    // Speed test
+    var speedTest: SpeedTestResult? = nil
+
+    // Monitoring data
+    var activeAlarms: [AlarmDTO]? = nil
+    var dpiCategories: [DPICategoryDTO]? = nil
+    var ipsEvents: [IPSEventDTO]? = nil
+    var anomalies: [AnomalyDTO]? = nil
+    var siteEvents: [SiteEventDTO]? = nil
+    var ddnsStatuses: [DDNSStatusDTO]? = nil
+    var portForwards: [PortForwardDTO]? = nil
+    var nearbyAPs: [RogueAPDTO]? = nil
+
     // Metadata
     var lastUpdated: Date? = nil
 
@@ -214,6 +227,32 @@ final class WiFiStatus {
         return "\(online) online · \(offline) offline"
     }
 
+    var activeAlarmCount: Int {
+        activeAlarms?.count ?? 0
+    }
+
+    var ipsEventCount: Int {
+        ipsEvents?.count ?? 0
+    }
+
+    var anomalyCount: Int {
+        anomalies?.count ?? 0
+    }
+
+    var securitySummary: String? {
+        let threats = ipsEventCount
+        let anomalyN = anomalyCount
+        guard threats > 0 || anomalyN > 0 else { return nil }
+        var parts: [String] = []
+        if threats > 0 { parts.append("\(threats) threat\(threats == 1 ? "" : "s")") }
+        if anomalyN > 0 { parts.append("\(anomalyN) anomal\(anomalyN == 1 ? "y" : "ies")") }
+        return parts.joined(separator: " · ")
+    }
+
+    var nearbyAPCount: Int {
+        nearbyAPs?.count ?? 0
+    }
+
     var firmwareBadge: String? {
         guard let names = devicesWithUpdates, !names.isEmpty else { return nil }
         let count = names.count
@@ -322,6 +361,7 @@ final class WiFiStatus {
             wanDrops = (health.drops ?? 0) > 0 ? health.drops : nil
             wanTxBytesRate = health.txBytesRate
             wanRxBytesRate = health.rxBytesRate
+            speedTest = health.speedTest
         } else {
             wanIsUp = nil
             wanIP = nil
@@ -331,6 +371,7 @@ final class WiFiStatus {
             wanDrops = nil
             wanTxBytesRate = nil
             wanRxBytesRate = nil
+            speedTest = nil
         }
     }
 
@@ -388,6 +429,26 @@ final class WiFiStatus {
                 duration: $0.value,
                 fraction: Double($0.value) / Double(maxDuration)
             )}
+    }
+
+    func updateMonitoring(
+        alarms: [AlarmDTO]?,
+        dpi: [DPICategoryDTO]?,
+        ips: [IPSEventDTO]?,
+        anomalies: [AnomalyDTO]?,
+        events: [SiteEventDTO]?,
+        ddns: [DDNSStatusDTO]?,
+        portForwards: [PortForwardDTO]?,
+        rogueAPs: [RogueAPDTO]?
+    ) {
+        self.activeAlarms = alarms
+        self.dpiCategories = dpi
+        self.ipsEvents = ips
+        self.anomalies = anomalies
+        self.siteEvents = events
+        self.ddnsStatuses = ddns
+        self.portForwards = portForwards
+        self.nearbyAPs = rogueAPs
     }
 
     func markDisconnected() {

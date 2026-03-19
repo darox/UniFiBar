@@ -170,7 +170,7 @@ final class StatusBarController {
 
         let me = selfInfo.client
 
-        // Parallel batch: devices, WAN health, VPN tunnels, session history
+        // Parallel batch 1: devices, WAN health, VPN tunnels, session history
         async let devicesTask = client.fetchDevices(siteId: siteId)
         async let wanHealthTask = client.fetchWANHealth()
         async let vpnTask = client.fetchVPNTunnels(siteId: siteId)
@@ -191,7 +191,7 @@ final class StatusBarController {
         wifiStatus.updateVPN(tunnels)
         wifiStatus.updateSessions(sessions, devices: devices)
 
-        // Parallel batch: AP stats + gateway stats (depend on devices result)
+        // Parallel batch 2: AP stats + gateway stats (depend on devices result)
         let apDevice = me.apMac.flatMap { apMac in
             devices.first(where: { $0.mac?.lowercased() == apMac.lowercased() })
         }
@@ -216,5 +216,50 @@ final class StatusBarController {
 
         wifiStatus.updateAPStats(apStats)
         wifiStatus.updateGateway(gwStats, device: gwDevice)
+
+        // Parallel batch 3: monitoring data (only fetch enabled sections)
+        await fetchMonitoringData(client: client)
+    }
+
+    /// Fetches optional monitoring data based on which sections are enabled in preferences.
+    /// Each call is independent and fails silently — monitoring data is best-effort.
+    private func fetchMonitoringData(client: UniFiClient) async {
+        // Evaluate section visibility on @MainActor before spawning child tasks
+        let wantAlarms = preferences.isSectionEnabled(.alerts)
+        let wantTraffic = preferences.isSectionEnabled(.traffic)
+        let wantSecurity = preferences.isSectionEnabled(.security)
+        let wantEvents = preferences.isSectionEnabled(.events)
+        let wantDDNS = preferences.isSectionEnabled(.ddns)
+        let wantPF = preferences.isSectionEnabled(.portForwards)
+        let wantRogue = preferences.isSectionEnabled(.nearbyAPs)
+
+        async let alarmsTask: [AlarmDTO]? = wantAlarms ? await client.fetchAlarms() : nil
+        async let dpiTask: [DPICategoryDTO]? = wantTraffic ? await client.fetchDPIStats() : nil
+        async let ipsTask: [IPSEventDTO]? = wantSecurity ? await client.fetchIPSEvents() : nil
+        async let anomaliesTask: [AnomalyDTO]? = wantSecurity ? await client.fetchAnomalies() : nil
+        async let eventsTask: [SiteEventDTO]? = wantEvents ? await client.fetchSiteEvents() : nil
+        async let ddnsTask: [DDNSStatusDTO]? = wantDDNS ? await client.fetchDDNSStatus() : nil
+        async let pfTask: [PortForwardDTO]? = wantPF ? await client.fetchPortForwards() : nil
+        async let rogueTask: [RogueAPDTO]? = wantRogue ? await client.fetchRogueAPs() : nil
+
+        let alarms = await alarmsTask
+        let dpi = await dpiTask
+        let ips = await ipsTask
+        let anomalies = await anomaliesTask
+        let events = await eventsTask
+        let ddns = await ddnsTask
+        let pf = await pfTask
+        let rogue = await rogueTask
+
+        wifiStatus.updateMonitoring(
+            alarms: alarms,
+            dpi: dpi,
+            ips: ips,
+            anomalies: anomalies,
+            events: events,
+            ddns: ddns,
+            portForwards: pf,
+            rogueAPs: rogue
+        )
     }
 }

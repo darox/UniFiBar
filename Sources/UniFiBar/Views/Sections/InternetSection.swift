@@ -6,6 +6,13 @@ struct InternetSection: View {
     var body: some View {
         SectionHeader(title: "Internet", showDivider: false)
 
+        wanStatusGroup
+        speedTestGroup
+        gatewayGroup
+    }
+
+    @ViewBuilder
+    private var wanStatusGroup: some View {
         if let isUp = wifiStatus.wanIsUp {
             HStack(spacing: 6) {
                 Image(systemName: isUp ? "globe" : "globe.badge.chevron.backward")
@@ -44,8 +51,42 @@ struct InternetSection: View {
         if let throughput = wifiStatus.formattedWANThroughput {
             MetricRow(label: "Throughput", value: throughput, systemImage: "arrow.up.arrow.down")
         }
+    }
 
-        // Gateway health
+    @ViewBuilder
+    private var speedTestGroup: some View {
+        if let speedTest = wifiStatus.speedTest, !speedTest.isRunning {
+            SubSectionHeader(title: "Speed Test")
+
+            if let dl = speedTest.formattedDownload {
+                MetricRow(label: "Download", value: dl, systemImage: "arrow.down.circle")
+            }
+            if let ul = speedTest.formattedUpload {
+                MetricRow(label: "Upload", value: ul, systemImage: "arrow.up.circle")
+            }
+            if let ping = speedTest.formattedPing {
+                MetricRow(label: "Ping", value: ping, systemImage: "stopwatch")
+            }
+            if let lastRun = speedTest.formattedLastRun {
+                MetricRow(label: "Tested", value: lastRun, systemImage: "clock")
+            }
+        } else if let speedTest = wifiStatus.speedTest, speedTest.isRunning {
+            SubSectionHeader(title: "Speed Test")
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 20, alignment: .center)
+                Text("Speed test running...")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 1)
+        }
+    }
+
+    @ViewBuilder
+    private var gatewayGroup: some View {
         if let gwName = wifiStatus.gatewayName {
             SubSectionHeader(title: "Gateway")
             MetricRow(label: "Device", value: gwName, systemImage: "server.rack")

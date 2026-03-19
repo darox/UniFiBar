@@ -212,6 +212,118 @@ actor UniFiClient {
         }
     }
 
+    // MARK: - Alarms
+
+    func fetchAlarms() async -> [AlarmDTO]? {
+        do {
+            let data = try await request("/proxy/network/api/s/default/rest/alarm")
+            let response = try JSONDecoder().decode(LegacyResponse<AlarmDTO>.self, from: data)
+            let active = response.data.filter { $0.archived != true }
+            return active.isEmpty ? nil : Array(active.prefix(10))
+        } catch {
+            Self.logger.error("Failed to fetch alarms: \(error)")
+            return nil
+        }
+    }
+
+    // MARK: - DPI Stats
+
+    func fetchDPIStats() async -> [DPICategoryDTO]? {
+        do {
+            let body: [String: Any] = ["type": "by_cat"]
+            let data = try await post("/proxy/network/api/s/default/stat/sitedpi", body: body)
+            let response = try JSONDecoder().decode(DPIStatsResponse.self, from: data)
+            let categories = response.toCategories()
+            return categories.isEmpty ? nil : Array(categories.prefix(8))
+        } catch {
+            Self.logger.error("Failed to fetch DPI stats: \(error)")
+            return nil
+        }
+    }
+
+    // MARK: - IDS/IPS Events
+
+    func fetchIPSEvents() async -> [IPSEventDTO]? {
+        do {
+            let data = try await request("/proxy/network/api/s/default/stat/ips/event")
+            let response = try JSONDecoder().decode(LegacyResponse<IPSEventDTO>.self, from: data)
+            return response.data.isEmpty ? nil : Array(response.data.prefix(10))
+        } catch {
+            Self.logger.error("Failed to fetch IPS events: \(error)")
+            return nil
+        }
+    }
+
+    // MARK: - Anomalies
+
+    func fetchAnomalies() async -> [AnomalyDTO]? {
+        do {
+            let data = try await request("/proxy/network/api/s/default/stat/anomalies")
+            let response = try JSONDecoder().decode(LegacyResponse<AnomalyDTO>.self, from: data)
+            return response.data.isEmpty ? nil : Array(response.data.prefix(10))
+        } catch {
+            Self.logger.error("Failed to fetch anomalies: \(error)")
+            return nil
+        }
+    }
+
+    // MARK: - Site Events
+
+    func fetchSiteEvents() async -> [SiteEventDTO]? {
+        do {
+            let data = try await request("/proxy/network/api/s/default/stat/event")
+            let response = try JSONDecoder().decode(LegacyResponse<SiteEventDTO>.self, from: data)
+            return response.data.isEmpty ? nil : Array(response.data.prefix(10))
+        } catch {
+            Self.logger.error("Failed to fetch site events: \(error)")
+            return nil
+        }
+    }
+
+    // MARK: - Dynamic DNS
+
+    func fetchDDNSStatus() async -> [DDNSStatusDTO]? {
+        do {
+            let data = try await request("/proxy/network/api/s/default/stat/dynamicdns")
+            let response = try JSONDecoder().decode(LegacyResponse<DDNSStatusDTO>.self, from: data)
+            return response.data.isEmpty ? nil : response.data
+        } catch {
+            Self.logger.error("Failed to fetch DDNS status: \(error)")
+            return nil
+        }
+    }
+
+    // MARK: - Port Forwards
+
+    func fetchPortForwards() async -> [PortForwardDTO]? {
+        do {
+            let data = try await request("/proxy/network/api/s/default/stat/portforward")
+            let response = try JSONDecoder().decode(LegacyResponse<PortForwardDTO>.self, from: data)
+            let active = response.data.filter { $0.enabled == true }
+            return active.isEmpty ? nil : active
+        } catch {
+            Self.logger.error("Failed to fetch port forwards: \(error)")
+            return nil
+        }
+    }
+
+    // MARK: - Rogue / Neighboring APs
+
+    func fetchRogueAPs() async -> [RogueAPDTO]? {
+        do {
+            let body: [String: Any] = ["within": 24]
+            let data = try await post("/proxy/network/api/s/default/stat/rogueap", body: body)
+            let response = try JSONDecoder().decode(LegacyResponse<RogueAPDTO>.self, from: data)
+            guard !response.data.isEmpty else { return nil }
+            // Return top 10 by signal strength
+            let sorted = response.data.sorted { ($0.rssi ?? -100) > ($1.rssi ?? -100) }
+            return Array(sorted.prefix(10))
+        } catch {
+            Self.logger.error("Failed to fetch rogue APs: \(error)")
+            return nil
+        }
+    }
+
     // MARK: - Validation
 
     /// Validates that an identifier is safe for URL path interpolation (alphanumeric, hyphens, colons).

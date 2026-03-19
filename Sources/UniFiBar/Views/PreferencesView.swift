@@ -12,6 +12,7 @@ struct PreferencesView: View {
     @State private var isLoading = true
     @State private var showResetConfirmation = false
     @State private var errorMessage: String?
+    @State private var showSectionSettings = false
 
     var body: some View {
         VStack(spacing: 20) {
@@ -60,6 +61,18 @@ struct PreferencesView: View {
                                 .textSelection(.enabled)
                         }
                     }
+
+                    Divider()
+
+                    DisclosureGroup("Visible Sections", isExpanded: $showSectionSettings) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(MenuSection.allCases, id: \.rawValue) { section in
+                                SectionToggleRow(section: section, preferences: controller.preferences)
+                            }
+                        }
+                        .padding(.top, 4)
+                    }
+                    .font(.callout)
                 }
 
                 if let errorMessage {
@@ -162,6 +175,32 @@ struct PreferencesView: View {
             }
         } catch {
             launchAtLogin = SMAppService.mainApp.status == .enabled
+        }
+    }
+}
+
+// MARK: - Section Toggle Row
+
+private struct SectionToggleRow: View {
+    let section: MenuSection
+    let preferences: PreferencesManager
+
+    @State private var isEnabled: Bool
+
+    init(section: MenuSection, preferences: PreferencesManager) {
+        self.section = section
+        self.preferences = preferences
+        self._isEnabled = State(initialValue: preferences.isSectionEnabled(section))
+    }
+
+    var body: some View {
+        Toggle(isOn: $isEnabled) {
+            Label(section.displayName, systemImage: section.icon)
+        }
+        .toggleStyle(.checkbox)
+        .font(.callout)
+        .onChange(of: isEnabled) { _, newValue in
+            preferences.setSectionEnabled(section, enabled: newValue)
         }
     }
 }

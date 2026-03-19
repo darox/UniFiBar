@@ -14,7 +14,9 @@ actor UniFiClient {
 
     init(baseURL: URL, apiKey: String, allowSelfSigned: Bool = false) {
         self.baseURL = baseURL
-        self.apiKey = apiKey
+        // Strip control characters to prevent HTTP header injection
+        self.apiKey = apiKey.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }
+            .map(String.init).joined()
 
         if allowSelfSigned {
             let config = URLSessionConfiguration.default
@@ -286,7 +288,7 @@ actor UniFiClient {
         do {
             let data = try await request("/proxy/network/api/s/default/stat/dynamicdns")
             let response = try JSONDecoder().decode(LegacyResponse<DDNSStatusDTO>.self, from: data)
-            return response.data.isEmpty ? nil : response.data
+            return response.data.isEmpty ? nil : Array(response.data.prefix(10))
         } catch {
             Self.logger.error("Failed to fetch DDNS status: \(error)")
             return nil
@@ -300,7 +302,7 @@ actor UniFiClient {
             let data = try await request("/proxy/network/api/s/default/stat/portforward")
             let response = try JSONDecoder().decode(LegacyResponse<PortForwardDTO>.self, from: data)
             let active = response.data.filter { $0.enabled == true }
-            return active.isEmpty ? nil : active
+            return active.isEmpty ? nil : Array(active.prefix(50))
         } catch {
             Self.logger.error("Failed to fetch port forwards: \(error)")
             return nil

@@ -146,12 +146,18 @@ final class PreferencesManager {
     }
 
     func resetAll() async {
+        // Clear certificate pin for the current controller host
+        if let urlString = cachedURL, let url = URL(string: urlString), let host = url.host() {
+            UserDefaults.standard.removeObject(forKey: "com.unifbar.cert-pin.\(host)")
+        }
         await KeychainHelper.shared.delete(.controllerURL)
         await KeychainHelper.shared.delete(.apiKey)
         cachedURL = nil
         cachedAPIKey = nil
         UserDefaults.standard.removeObject(forKey: siteIdKey)
         UserDefaults.standard.removeObject(forKey: selfSignedKey)
+        UserDefaults.standard.removeObject(forKey: sectionVisibilityKey)
+        sectionVisibility = [:]
         allowSelfSignedCerts = false
         isConfigured = false
     }

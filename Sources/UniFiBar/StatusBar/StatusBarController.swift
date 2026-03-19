@@ -171,7 +171,7 @@ final class StatusBarController {
             return
         } catch {
             consecutiveErrors += 1
-            Self.logger.error("Failed to fetch self: \(error)")
+            Self.logger.error("Failed to fetch self: \((error as NSError).domain) code=\((error as NSError).code)")
             wifiStatus.markError(.controllerUnreachable)
             return
         }

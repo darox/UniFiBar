@@ -94,10 +94,10 @@ struct SetupView: View {
         }
 
         guard let url = URL(string: urlString),
-              let scheme = url.scheme, scheme == "http" || scheme == "https",
+              let scheme = url.scheme, scheme == "https",
               let host = url.host(), !host.isEmpty
         else {
-            errorMessage = "Invalid URL. Use format: https://192.168.1.1"
+            errorMessage = "Invalid URL. Use HTTPS format: https://192.168.1.1"
             isValidating = false
             return
         }
@@ -145,7 +145,7 @@ struct SetupView: View {
         } catch is URLError {
             errorMessage = "Could not reach the controller. Check the URL and your network connection."
         } catch {
-            errorMessage = "Unexpected error: \(error.localizedDescription)"
+            errorMessage = "Connection failed. Check your URL and network settings."
         }
 
         isValidating = false

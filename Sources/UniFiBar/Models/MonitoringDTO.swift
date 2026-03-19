@@ -273,7 +273,7 @@ struct DDNSStatusDTO: Decodable, Sendable {
         case "abuse": return "Abuse"
         case "nohost": return "No Host"
         case "badauth": return "Auth Error"
-        default: return status?.capitalized ?? "Unknown"
+        default: return truncated(status?.capitalized ?? "Unknown", maxLength: 32)
         }
     }
 }

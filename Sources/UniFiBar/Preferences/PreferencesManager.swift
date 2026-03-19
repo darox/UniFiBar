@@ -146,8 +146,10 @@ final class PreferencesManager {
     }
 
     func resetAll() async {
-        // Clear certificate pin for the current controller host
+        // Clear certificate pin for the current controller host from Keychain
         if let urlString = cachedURL, let url = URL(string: urlString), let host = url.host() {
+            PinnedCertDelegate.deletePinFromKeychain(host: host)
+            // Also clean up legacy UserDefaults pin if present from older versions
             UserDefaults.standard.removeObject(forKey: "com.unifbar.cert-pin.\(host)")
         }
         await KeychainHelper.shared.delete(.controllerURL)

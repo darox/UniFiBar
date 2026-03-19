@@ -31,12 +31,19 @@ final class StatusBarController {
     private var wakeObserver: NSObjectProtocol?
     private var hasStarted = false
     private var consecutiveErrors = 0
+    private var lastManualRefresh: Date = .distantPast
 
-    deinit {
+    /// Tears down observers. Must be called on @MainActor before the object is released,
+    /// since `deinit` is nonisolated in Swift 6 and cannot safely access actor-isolated state.
+    func tearDown() {
         if let observer = wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            wakeObserver = nil
         }
         pathMonitor?.cancel()
+        pathMonitor = nil
+        pollTask?.cancel()
+        pollTask = nil
     }
 
     func start() async {
@@ -64,6 +71,10 @@ final class StatusBarController {
     }
 
     func refreshNow() {
+        // Debounce: ignore rapid-fire manual refreshes (min 5s apart)
+        let now = Date()
+        guard now.timeIntervalSince(lastManualRefresh) >= 5 else { return }
+        lastManualRefresh = now
         Task {
             await refresh()
         }
@@ -134,7 +145,7 @@ final class StatusBarController {
                 preferences.siteId = siteId
             }
         } catch {
-            Self.logger.error("Site discovery failed: \(error)")
+            Self.logger.error("Site discovery failed: \((error as NSError).domain) code=\((error as NSError).code)")
             consecutiveErrors += 1
             wifiStatus.markError(.controllerUnreachable)
             return
@@ -154,7 +165,7 @@ final class StatusBarController {
                 Self.logger.info("This device not found in active clients — likely disconnected")
                 wifiStatus.markDisconnected()
             default:
-                Self.logger.error("Failed to fetch self: \(error)")
+                Self.logger.error("Failed to fetch self: \((error as NSError).domain) code=\((error as NSError).code)")
                 wifiStatus.markError(.controllerUnreachable)
             }
             return

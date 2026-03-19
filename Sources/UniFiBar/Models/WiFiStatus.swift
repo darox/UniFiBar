@@ -25,6 +25,7 @@ final class WiFiStatus {
     var mimoDescription: String? = nil
     var rxRate: Int? = nil
     var txRate: Int? = nil
+    var txRetriesPct: Double? = nil
     var rxBytes: Int? = nil
     var txBytes: Int? = nil
     var ip: String? = nil
@@ -161,6 +162,11 @@ final class WiFiStatus {
         return "\(count) roam\(count == 1 ? "" : "s")"
     }
 
+    var formattedTxRetries: String? {
+        guard let pct = txRetriesPct, pct > 0 else { return nil }
+        return String(format: "%.1f%%", pct)
+    }
+
     var formattedAPLoad: String? {
         guard let cpu = apCPU, let mem = apMemory else { return nil }
         return "CPU \(Int(cpu))% · Mem \(Int(mem))%"
@@ -252,6 +258,7 @@ final class WiFiStatus {
         mimoDescription = client.mimoDescription
         rxRate = client.rxRate
         txRate = client.txRate
+        txRetriesPct = client.wifiTxRetriesPercentage
         rxBytes = client.rxBytes
         txBytes = client.txBytes
         uptime = client.uptime

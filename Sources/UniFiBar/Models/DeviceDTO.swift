@@ -154,7 +154,6 @@ struct APStats: Sendable {
     let uptimeSec: Int?
     let cpuUtilizationPct: Double?
     let memoryUtilizationPct: Double?
-    let txRetriesPct: Double?
 }
 
 struct APStatsResponse: Decodable, Sendable {
@@ -166,8 +165,7 @@ struct APStatsResponse: Decodable, Sendable {
         APStats(
             uptimeSec: uptimeSec,
             cpuUtilizationPct: cpuUtilizationPct,
-            memoryUtilizationPct: memoryUtilizationPct,
-            txRetriesPct: nil
+            memoryUtilizationPct: memoryUtilizationPct
         )
     }
 }

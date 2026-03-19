@@ -10,6 +10,7 @@ actor UniFiClient {
     private var siteId: String?
 
     private static let requestTimeout: TimeInterval = 15
+    private static let logger = Logger(subsystem: "com.unifbar.app", category: "UniFiClient")
 
     init(baseURL: URL, apiKey: String, allowSelfSigned: Bool = false) {
         self.baseURL = baseURL
@@ -119,7 +120,10 @@ actor UniFiClient {
     // MARK: - AP Statistics
 
     func fetchAPStats(deviceId: String, siteId: String) async -> APStats? {
-        guard Self.isValidIdentifier(deviceId), Self.isValidIdentifier(siteId) else { return nil }
+        guard Self.isValidIdentifier(deviceId), Self.isValidIdentifier(siteId) else {
+            Self.logger.warning("Invalid identifier for AP stats: deviceId=\(deviceId), siteId=\(siteId)")
+            return nil
+        }
         do {
             let data = try await request(
                 "/proxy/network/integrations/v1/sites/\(siteId)/devices/\(deviceId)/statistics/latest"
@@ -127,6 +131,7 @@ actor UniFiClient {
             let response = try JSONDecoder().decode(APStatsResponse.self, from: data)
             return response.toAPStats
         } catch {
+            Self.logger.error("Failed to fetch AP stats for device \(deviceId): \(error)")
             return nil
         }
     }
@@ -145,6 +150,7 @@ actor UniFiClient {
             let response = try JSONDecoder().decode(LegacyResponse<SessionDTO>.self, from: data)
             return response.data.isEmpty ? nil : response.data
         } catch {
+            Self.logger.error("Failed to fetch session history for \(mac): \(error)")
             return nil
         }
     }
@@ -169,6 +175,7 @@ actor UniFiClient {
             let response = try JSONDecoder().decode(VPNTunnelResponse.self, from: data)
             return response.data.isEmpty ? nil : response.data
         } catch {
+            Self.logger.error("Failed to fetch VPN tunnels: \(error)")
             return nil
         }
     }
@@ -181,6 +188,7 @@ actor UniFiClient {
             let response = try JSONDecoder().decode(WANHealthResponse.self, from: data)
             return response.toWANHealth()
         } catch {
+            Self.logger.error("Failed to fetch WAN health: \(error)")
             return nil
         }
     }
@@ -188,7 +196,10 @@ actor UniFiClient {
     // MARK: - Gateway Statistics
 
     func fetchGatewayStats(deviceId: String, siteId: String) async -> GatewayStats? {
-        guard Self.isValidIdentifier(deviceId), Self.isValidIdentifier(siteId) else { return nil }
+        guard Self.isValidIdentifier(deviceId), Self.isValidIdentifier(siteId) else {
+            Self.logger.warning("Invalid identifier for gateway stats: deviceId=\(deviceId), siteId=\(siteId)")
+            return nil
+        }
         do {
             let data = try await request(
                 "/proxy/network/integrations/v1/sites/\(siteId)/devices/\(deviceId)/statistics/latest"
@@ -196,6 +207,7 @@ actor UniFiClient {
             let response = try JSONDecoder().decode(GatewayStatsResponse.self, from: data)
             return response.toGatewayStats
         } catch {
+            Self.logger.error("Failed to fetch gateway stats for device \(deviceId): \(error)")
             return nil
         }
     }

@@ -123,7 +123,7 @@ struct SetupView: View {
             switch error {
             case .httpError(let code) where code == 401 || code == 403:
                 failedAttempts += 1
-                errorMessage = "Could not connect. Check your URL, API key, and certificate settings."
+                errorMessage = "Authentication failed. Check your API key."
 
                 // Rate limit only on auth failures (possible brute force)
                 if failedAttempts >= 5 {
@@ -135,11 +135,17 @@ struct SetupView: View {
                         retryAvailableAt = nil
                     }
                 }
+            case .httpError(let code):
+                errorMessage = "Server returned HTTP \(code). Check your controller URL."
+            case .noSitesFound:
+                errorMessage = "Connected, but no sites found on this controller."
             default:
-                errorMessage = "Could not connect. Check your URL, API key, and certificate settings."
+                errorMessage = "Could not connect. Check your URL and certificate settings."
             }
+        } catch is URLError {
+            errorMessage = "Could not reach the controller. Check the URL and your network connection."
         } catch {
-            errorMessage = "Could not connect. Check your URL, API key, and certificate settings."
+            errorMessage = "Unexpected error: \(error.localizedDescription)"
         }
 
         isValidating = false

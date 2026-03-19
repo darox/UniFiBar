@@ -7,8 +7,12 @@ APP_NAME="UniFiBar"
 BUILD_DIR="$PROJECT_DIR/.build"
 APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
 
-# Source version info
-source "$PROJECT_DIR/version.env"
+# Source version info (with defaults)
+APP_VERSION="0.0.0"
+BUILD_NUMBER="0"
+if [ -f "$PROJECT_DIR/version.env" ]; then
+    source "$PROJECT_DIR/version.env"
+fi
 
 echo "==> Killing existing $APP_NAME..."
 pkill -x "$APP_NAME" 2>/dev/null || true
@@ -69,26 +73,35 @@ if [ -f "$PROJECT_DIR/UniFiBar.entitlements" ]; then
     cp "$PROJECT_DIR/UniFiBar.entitlements" "$APP_BUNDLE/Contents/Resources/"
 fi
 
-# Generate .icns from app icon PNGs
-ICONSET_DIR="$BUILD_DIR/AppIcon.iconset"
-rm -rf "$ICONSET_DIR"
-mkdir -p "$ICONSET_DIR"
+# Generate .icns from app icon PNGs (if available)
 ICON_SRC="$PROJECT_DIR/Resources/Assets.xcassets/AppIcon.appiconset"
-cp "$ICON_SRC/icon_16x16.png" "$ICONSET_DIR/icon_16x16.png"
-cp "$ICON_SRC/icon_16x16@2x.png" "$ICONSET_DIR/icon_16x16@2x.png"
-cp "$ICON_SRC/icon_32x32.png" "$ICONSET_DIR/icon_32x32.png"
-cp "$ICON_SRC/icon_32x32@2x.png" "$ICONSET_DIR/icon_32x32@2x.png"
-cp "$ICON_SRC/icon_128x128.png" "$ICONSET_DIR/icon_128x128.png"
-cp "$ICON_SRC/icon_128x128@2x.png" "$ICONSET_DIR/icon_128x128@2x.png"
-cp "$ICON_SRC/icon_256x256.png" "$ICONSET_DIR/icon_256x256.png"
-cp "$ICON_SRC/icon_256x256@2x.png" "$ICONSET_DIR/icon_256x256@2x.png"
-cp "$ICON_SRC/icon_512x512.png" "$ICONSET_DIR/icon_512x512.png"
-cp "$ICON_SRC/icon_512x512@2x.png" "$ICONSET_DIR/icon_512x512@2x.png"
-iconutil -c icns "$ICONSET_DIR" -o "$APP_BUNDLE/Contents/Resources/AppIcon.icns" 2>/dev/null || true
+if [ -d "$ICON_SRC" ]; then
+    ICONSET_DIR="$BUILD_DIR/AppIcon.iconset"
+    rm -rf "$ICONSET_DIR"
+    mkdir -p "$ICONSET_DIR"
+    cp "$ICON_SRC/icon_16x16.png" "$ICONSET_DIR/icon_16x16.png"
+    cp "$ICON_SRC/icon_16x16@2x.png" "$ICONSET_DIR/icon_16x16@2x.png"
+    cp "$ICON_SRC/icon_32x32.png" "$ICONSET_DIR/icon_32x32.png"
+    cp "$ICON_SRC/icon_32x32@2x.png" "$ICONSET_DIR/icon_32x32@2x.png"
+    cp "$ICON_SRC/icon_128x128.png" "$ICONSET_DIR/icon_128x128.png"
+    cp "$ICON_SRC/icon_128x128@2x.png" "$ICONSET_DIR/icon_128x128@2x.png"
+    cp "$ICON_SRC/icon_256x256.png" "$ICONSET_DIR/icon_256x256.png"
+    cp "$ICON_SRC/icon_256x256@2x.png" "$ICONSET_DIR/icon_256x256@2x.png"
+    cp "$ICON_SRC/icon_512x512.png" "$ICONSET_DIR/icon_512x512.png"
+    cp "$ICON_SRC/icon_512x512@2x.png" "$ICONSET_DIR/icon_512x512@2x.png"
+    iconutil -c icns "$ICONSET_DIR" -o "$APP_BUNDLE/Contents/Resources/AppIcon.icns" 2>/dev/null || true
+else
+    echo "WARNING: App icon assets not found at $ICON_SRC, skipping icon generation"
+fi
 
-# Copy status bar icon
-cp "$PROJECT_DIR/Resources/Assets.xcassets/StatusBarIcon.imageset/icon@1x.png" "$APP_BUNDLE/Contents/Resources/"
-cp "$PROJECT_DIR/Resources/Assets.xcassets/StatusBarIcon.imageset/icon@2x.png" "$APP_BUNDLE/Contents/Resources/"
+# Copy status bar icon (if available)
+STATUSBAR_SRC="$PROJECT_DIR/Resources/Assets.xcassets/StatusBarIcon.imageset"
+if [ -d "$STATUSBAR_SRC" ]; then
+    cp "$STATUSBAR_SRC/icon@1x.png" "$APP_BUNDLE/Contents/Resources/"
+    cp "$STATUSBAR_SRC/icon@2x.png" "$APP_BUNDLE/Contents/Resources/"
+else
+    echo "WARNING: Status bar icon assets not found, skipping"
+fi
 
 echo "==> Signing (ad-hoc)..."
 codesign --force --sign - "$APP_BUNDLE" 2>/dev/null || true

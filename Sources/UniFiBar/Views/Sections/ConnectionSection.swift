@@ -89,6 +89,10 @@ struct LinkSection: View {
         MetricRow(label: "Rx", value: wifiStatus.formattedRxRate, systemImage: "arrow.down")
         MetricRow(label: "Tx", value: wifiStatus.formattedTxRate, systemImage: "arrow.up")
 
+        if let retries = wifiStatus.formattedTxRetries {
+            MetricRow(label: "Tx Retries", value: retries, systemImage: "arrow.counterclockwise")
+        }
+
         if let sessionData = wifiStatus.formattedSessionData {
             MetricRow(label: "Data", value: sessionData, systemImage: "chart.bar")
         }

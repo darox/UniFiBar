@@ -123,7 +123,7 @@ actor UniFiClient {
 
     func fetchAPStats(deviceId: String, siteId: String) async -> APStats? {
         guard Self.isValidIdentifier(deviceId), Self.isValidIdentifier(siteId) else {
-            Self.logger.warning("Invalid identifier for AP stats: deviceId=\(deviceId), siteId=\(siteId)")
+            Self.logger.warning("Invalid identifier for AP stats request")
             return nil
         }
         do {
@@ -133,7 +133,7 @@ actor UniFiClient {
             let response = try JSONDecoder().decode(APStatsResponse.self, from: data)
             return response.toAPStats
         } catch {
-            Self.logger.error("Failed to fetch AP stats for device \(deviceId): \(error)")
+            Self.logger.error("Failed to fetch AP stats: \(Self.safeErrorDescription(error))")
             return nil
         }
     }
@@ -152,7 +152,7 @@ actor UniFiClient {
             let response = try JSONDecoder().decode(LegacyResponse<SessionDTO>.self, from: data)
             return response.data.isEmpty ? nil : response.data
         } catch {
-            Self.logger.error("Failed to fetch session history for \(mac): \(error)")
+            Self.logger.error("Failed to fetch session history: \(Self.safeErrorDescription(error))")
             return nil
         }
     }
@@ -177,7 +177,7 @@ actor UniFiClient {
             let response = try JSONDecoder().decode(VPNTunnelResponse.self, from: data)
             return response.data.isEmpty ? nil : response.data
         } catch {
-            Self.logger.error("Failed to fetch VPN tunnels: \(error)")
+            Self.logger.error("Failed to fetch VPN tunnels: \(Self.safeErrorDescription(error))")
             return nil
         }
     }
@@ -190,7 +190,7 @@ actor UniFiClient {
             let response = try JSONDecoder().decode(WANHealthResponse.self, from: data)
             return response.toWANHealth()
         } catch {
-            Self.logger.error("Failed to fetch WAN health: \(error)")
+            Self.logger.error("Failed to fetch WAN health: \(Self.safeErrorDescription(error))")
             return nil
         }
     }
@@ -199,7 +199,7 @@ actor UniFiClient {
 
     func fetchGatewayStats(deviceId: String, siteId: String) async -> GatewayStats? {
         guard Self.isValidIdentifier(deviceId), Self.isValidIdentifier(siteId) else {
-            Self.logger.warning("Invalid identifier for gateway stats: deviceId=\(deviceId), siteId=\(siteId)")
+            Self.logger.warning("Invalid identifier for gateway stats request")
             return nil
         }
         do {
@@ -209,7 +209,7 @@ actor UniFiClient {
             let response = try JSONDecoder().decode(GatewayStatsResponse.self, from: data)
             return response.toGatewayStats
         } catch {
-            Self.logger.error("Failed to fetch gateway stats for device \(deviceId): \(error)")
+            Self.logger.error("Failed to fetch gateway stats: \(Self.safeErrorDescription(error))")
             return nil
         }
     }
@@ -223,7 +223,7 @@ actor UniFiClient {
             let active = response.data.filter { $0.archived != true }
             return active.isEmpty ? nil : Array(active.prefix(10))
         } catch {
-            Self.logger.error("Failed to fetch alarms: \(error)")
+            Self.logger.error("Failed to fetch alarms: \(Self.safeErrorDescription(error))")
             return nil
         }
     }
@@ -238,7 +238,7 @@ actor UniFiClient {
             let categories = response.toCategories()
             return categories.isEmpty ? nil : Array(categories.prefix(8))
         } catch {
-            Self.logger.error("Failed to fetch DPI stats: \(error)")
+            Self.logger.error("Failed to fetch DPI stats: \(Self.safeErrorDescription(error))")
             return nil
         }
     }
@@ -251,7 +251,7 @@ actor UniFiClient {
             let response = try JSONDecoder().decode(LegacyResponse<IPSEventDTO>.self, from: data)
             return response.data.isEmpty ? nil : Array(response.data.prefix(10))
         } catch {
-            Self.logger.error("Failed to fetch IPS events: \(error)")
+            Self.logger.error("Failed to fetch IPS events: \(Self.safeErrorDescription(error))")
             return nil
         }
     }
@@ -264,7 +264,7 @@ actor UniFiClient {
             let response = try JSONDecoder().decode(LegacyResponse<AnomalyDTO>.self, from: data)
             return response.data.isEmpty ? nil : Array(response.data.prefix(10))
         } catch {
-            Self.logger.error("Failed to fetch anomalies: \(error)")
+            Self.logger.error("Failed to fetch anomalies: \(Self.safeErrorDescription(error))")
             return nil
         }
     }
@@ -277,7 +277,7 @@ actor UniFiClient {
             let response = try JSONDecoder().decode(LegacyResponse<SiteEventDTO>.self, from: data)
             return response.data.isEmpty ? nil : Array(response.data.prefix(10))
         } catch {
-            Self.logger.error("Failed to fetch site events: \(error)")
+            Self.logger.error("Failed to fetch site events: \(Self.safeErrorDescription(error))")
             return nil
         }
     }
@@ -290,7 +290,7 @@ actor UniFiClient {
             let response = try JSONDecoder().decode(LegacyResponse<DDNSStatusDTO>.self, from: data)
             return response.data.isEmpty ? nil : Array(response.data.prefix(10))
         } catch {
-            Self.logger.error("Failed to fetch DDNS status: \(error)")
+            Self.logger.error("Failed to fetch DDNS status: \(Self.safeErrorDescription(error))")
             return nil
         }
     }
@@ -304,7 +304,7 @@ actor UniFiClient {
             let active = response.data.filter { $0.enabled == true }
             return active.isEmpty ? nil : Array(active.prefix(50))
         } catch {
-            Self.logger.error("Failed to fetch port forwards: \(error)")
+            Self.logger.error("Failed to fetch port forwards: \(Self.safeErrorDescription(error))")
             return nil
         }
     }
@@ -321,7 +321,7 @@ actor UniFiClient {
             let sorted = response.data.sorted { ($0.rssi ?? -100) > ($1.rssi ?? -100) }
             return Array(sorted.prefix(10))
         } catch {
-            Self.logger.error("Failed to fetch rogue APs: \(error)")
+            Self.logger.error("Failed to fetch rogue APs: \(Self.safeErrorDescription(error))")
             return nil
         }
     }
@@ -332,23 +332,50 @@ actor UniFiClient {
     private static func isValidIdentifier(_ id: String) -> Bool {
         !id.isEmpty && id.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == ":") }
     }
+
+    /// Returns a safe error description for logging (strips URLs and potential credential fragments).
+    private static func safeErrorDescription(_ error: Error) -> String {
+        if let unifiError = error as? UniFiError {
+            switch unifiError {
+            case .httpError(let code): return "HTTP \(code)"
+            case .noSitesFound: return "no sites found"
+            case .selfNotFound: return "self not found"
+            case .invalidURL: return "invalid URL"
+            case .notConfigured: return "not configured"
+            }
+        }
+        // For URLSession errors, only log the code/domain — not the full description which may contain URLs
+        let nsError = error as NSError
+        return "\(nsError.domain) code=\(nsError.code)"
+    }
 }
 
 // MARK: - Certificate Pinning Delegate (Trust-On-First-Use)
 
 /// Pins the server certificate on first connection. Subsequent connections must present
 /// the same certificate public key, preventing MITM attacks even with self-signed certs.
+/// On mismatch, the connection is rejected — the user must reset via Preferences to re-pin.
 final class PinnedCertDelegate: NSObject, URLSessionDelegate, Sendable {
     private let expectedHost: String
-    private let pinnedKeyKey: String
-    private let state: OSAllocatedUnfairLock<Data?>
+    private let keychainKey: String
+    private let state: OSAllocatedUnfairLock<PinState>
+
+    enum PinState: Sendable {
+        case unpinned
+        case pinned(Data)
+        case mismatch
+    }
 
     init(host: String) {
         self.expectedHost = host
-        self.pinnedKeyKey = "com.unifbar.cert-pin.\(host)"
-        self.state = OSAllocatedUnfairLock(
-            initialState: UserDefaults.standard.data(forKey: pinnedKeyKey)
-        )
+        self.keychainKey = "com.unifbar.cert-pin.\(host)"
+        // Load existing pin from Keychain
+        let existingPin = Self.loadPinFromKeychain(key: "com.unifbar.cert-pin.\(host)")
+        if let pin = existingPin {
+            self.state = OSAllocatedUnfairLock(initialState: .pinned(pin))
+        } else {
+            self.state = OSAllocatedUnfairLock(initialState: .unpinned)
+        }
     }
 
     func urlSession(
@@ -372,22 +399,29 @@ final class PinnedCertDelegate: NSObject, URLSessionDelegate, Sendable {
             return (.useCredential, URLCredential(trust: serverTrust))
         }
 
-        let storedHash = state.withLock { $0 }
+        let currentState = state.withLock { $0 }
 
-        if let storedHash {
-            // Verify against pinned key — if mismatch, clear stale pin and re-pin
-            // (cert rotation is common for self-signed certs)
-            if serverKeyHash != storedHash {
-                state.withLock { $0 = serverKeyHash }
-                UserDefaults.standard.set(serverKeyHash, forKey: pinnedKeyKey)
+        switch currentState {
+        case .pinned(let storedHash):
+            if serverKeyHash == storedHash {
+                // Pin matches — allow connection
+                return (.useCredential, URLCredential(trust: serverTrust))
+            } else {
+                // Pin MISMATCH — reject connection (possible MITM)
+                state.withLock { $0 = .mismatch }
+                return (.cancelAuthenticationChallenge, nil)
             }
-        } else {
-            // Trust-on-first-use: pin the key
-            state.withLock { $0 = serverKeyHash }
-            UserDefaults.standard.set(serverKeyHash, forKey: pinnedKeyKey)
-        }
 
-        return (.useCredential, URLCredential(trust: serverTrust))
+        case .unpinned:
+            // Trust-on-first-use: pin the key in Keychain
+            state.withLock { $0 = .pinned(serverKeyHash) }
+            Self.savePinToKeychain(key: keychainKey, data: serverKeyHash)
+            return (.useCredential, URLCredential(trust: serverTrust))
+
+        case .mismatch:
+            // Already in mismatch state — keep rejecting
+            return (.cancelAuthenticationChallenge, nil)
+        }
     }
 
     /// Extracts SHA-256 hash of the public key from a server trust.
@@ -401,5 +435,48 @@ final class PinnedCertDelegate: NSObject, URLSessionDelegate, Sendable {
         }
         let digest = SHA256.hash(data: keyData)
         return Data(digest)
+    }
+
+    // MARK: - Keychain storage for certificate pins
+
+    private static func loadPinFromKeychain(key: String) -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "com.unifbar.cert-pins",
+            kSecAttrAccount as String: key,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess, let data = result as? Data else { return nil }
+        return data
+    }
+
+    private static func savePinToKeychain(key: String, data: Data) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "com.unifbar.cert-pins",
+            kSecAttrAccount as String: key,
+        ]
+        // Try update first
+        let update: [String: Any] = [kSecValueData as String: data]
+        let updateStatus = SecItemUpdate(query as CFDictionary, update as CFDictionary)
+        if updateStatus == errSecSuccess { return }
+
+        // Add new item
+        var addQuery = query
+        addQuery[kSecValueData as String] = data
+        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        SecItemAdd(addQuery as CFDictionary, nil)
+    }
+
+    static func deletePinFromKeychain(host: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "com.unifbar.cert-pins",
+            kSecAttrAccount as String: "com.unifbar.cert-pin.\(host)",
+        ]
+        SecItemDelete(query as CFDictionary)
     }
 }

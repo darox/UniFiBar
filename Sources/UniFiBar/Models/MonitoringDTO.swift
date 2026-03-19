@@ -1,5 +1,13 @@
 import Foundation
 
+// MARK: - Helpers
+
+/// Truncates a string to a safe display length to prevent layout abuse from malicious API responses.
+private func truncated(_ string: String, maxLength: Int = 200) -> String {
+    if string.count <= maxLength { return string }
+    return String(string.prefix(maxLength)) + "…"
+}
+
 // MARK: - Alarms
 
 struct AlarmDTO: Decodable, Sendable, Identifiable {
@@ -23,14 +31,17 @@ struct AlarmDTO: Decodable, Sendable, Identifiable {
     }
 
     var displayMessage: String {
-        if let msg { return msg }
-        if let key { return key.replacingOccurrences(of: "EVT_", with: "").replacingOccurrences(of: "_", with: " ").capitalized }
+        if let msg { return truncated(msg) }
+        if let key { return truncated(key.replacingOccurrences(of: "EVT_", with: "").replacingOccurrences(of: "_", with: " ").capitalized) }
         return "Unknown Alert"
     }
 
     var date: Date? {
         guard let time else { return nil }
-        return Date(timeIntervalSince1970: TimeInterval(time) / 1000.0)
+        // Clamp to reasonable range (year 2000 to year 2100) to prevent formatter abuse
+        let seconds = TimeInterval(time) / 1000.0
+        guard seconds > 946_684_800 && seconds < 4_102_444_800 else { return nil }
+        return Date(timeIntervalSince1970: seconds)
     }
 
     var relativeTime: String {
@@ -167,12 +178,14 @@ struct IPSEventDTO: Decodable, Sendable, Identifiable {
     }
 
     var displayMessage: String {
-        msg ?? catname ?? "IPS Event"
+        truncated(msg ?? catname ?? "IPS Event")
     }
 
     var relativeTime: String {
         guard let timestamp else { return "" }
-        let date = Date(timeIntervalSince1970: TimeInterval(timestamp) / 1000.0)
+        let seconds = TimeInterval(timestamp) / 1000.0
+        guard seconds > 946_684_800 && seconds < 4_102_444_800 else { return "" }
+        let date = Date(timeIntervalSince1970: seconds)
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: Date())
@@ -211,14 +224,16 @@ struct SiteEventDTO: Decodable, Sendable, Identifiable {
     }
 
     var displayMessage: String {
-        if let msg { return msg }
-        if let key { return key.replacingOccurrences(of: "EVT_", with: "").replacingOccurrences(of: "_", with: " ").capitalized }
+        if let msg { return truncated(msg) }
+        if let key { return truncated(key.replacingOccurrences(of: "EVT_", with: "").replacingOccurrences(of: "_", with: " ").capitalized) }
         return "Event"
     }
 
     var relativeTime: String {
         guard let time else { return "" }
-        let date = Date(timeIntervalSince1970: TimeInterval(time) / 1000.0)
+        let seconds = TimeInterval(time) / 1000.0
+        guard seconds > 946_684_800 && seconds < 4_102_444_800 else { return "" }
+        let date = Date(timeIntervalSince1970: seconds)
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: Date())
@@ -286,12 +301,12 @@ struct PortForwardDTO: Decodable, Sendable, Identifiable {
     }
 
     var displayName: String {
-        name ?? "\(proto?.uppercased() ?? ""):\(dstPort ?? "?")"
+        truncated(name ?? "\(proto?.uppercased() ?? ""):\(dstPort ?? "?")", maxLength: 64)
     }
 
     var summary: String {
         let p = proto?.uppercased() ?? "TCP"
-        return "\(p) :\(dstPort ?? "?") → \(fwd ?? "?"):\(fwdPort ?? dstPort ?? "?")"
+        return truncated("\(p) :\(dstPort ?? "?") → \(fwd ?? "?"):\(fwdPort ?? dstPort ?? "?")", maxLength: 64)
     }
 }
 
@@ -316,11 +331,13 @@ struct RogueAPDTO: Decodable, Sendable, Identifiable {
 
     var signalDescription: String {
         guard let rssi else { return "—" }
-        return "\(rssi) dBm"
+        // Clamp to physically plausible range
+        let clamped = max(-120, min(0, rssi))
+        return "\(clamped) dBm"
     }
 
     var displayName: String {
-        essid ?? bssid ?? "Hidden"
+        truncated(essid ?? bssid ?? "Hidden", maxLength: 64)
     }
 }
 

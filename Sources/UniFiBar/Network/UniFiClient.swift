@@ -400,27 +400,27 @@ final class PinnedCertDelegate: NSObject, URLSessionDelegate, Sendable {
         }
 
         // Atomic read-check-write to prevent race between concurrent TLS challenges
-        let decision: (URLSession.AuthChallengeDisposition, URLCredential?) = state.withLock { currentState in
+        let (decision, shouldPersist): ((URLSession.AuthChallengeDisposition, URLCredential?), Bool) = state.withLock { currentState in
             switch currentState {
             case .pinned(let storedHash):
                 if serverKeyHash == storedHash {
-                    return (.useCredential, URLCredential(trust: serverTrust))
+                    return ((.useCredential, URLCredential(trust: serverTrust)), false)
                 } else {
                     currentState = .mismatch
-                    return (.cancelAuthenticationChallenge, nil)
+                    return ((.cancelAuthenticationChallenge, nil), false)
                 }
 
             case .unpinned:
                 currentState = .pinned(serverKeyHash)
-                return (.useCredential, URLCredential(trust: serverTrust))
+                return ((.useCredential, URLCredential(trust: serverTrust)), true)
 
             case .mismatch:
-                return (.cancelAuthenticationChallenge, nil)
+                return ((.cancelAuthenticationChallenge, nil), false)
             }
         }
 
-        // Persist pin to Keychain outside the lock (only on first pin)
-        if case .pinned = state.withLock({ $0 }) {
+        // Persist pin to Keychain outside the lock — only on first-use pin
+        if shouldPersist {
             Self.savePinToKeychain(key: keychainKey, data: serverKeyHash)
         }
 

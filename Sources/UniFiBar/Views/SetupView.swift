@@ -95,7 +95,8 @@ struct SetupView: View {
 
         guard let url = URL(string: urlString),
               let scheme = url.scheme, scheme == "https",
-              let host = url.host(), !host.isEmpty
+              let host = url.host(), !host.isEmpty,
+              url.query == nil, url.fragment == nil
         else {
             errorMessage = "Invalid URL. Use HTTPS format: https://192.168.1.1"
             isValidating = false

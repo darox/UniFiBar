@@ -146,7 +146,7 @@ final class StatusBarController {
             }
         } catch {
             Self.logger.error("Site discovery failed: \((error as NSError).domain) code=\((error as NSError).code)")
-            consecutiveErrors += 1
+            consecutiveErrors = min(consecutiveErrors + 1, 10)
             wifiStatus.markError(.controllerUnreachable)
             return
         }
@@ -156,7 +156,7 @@ final class StatusBarController {
         do {
             selfInfo = try await client.fetchSelfV2()
         } catch let error as UniFiError {
-            consecutiveErrors += 1
+            consecutiveErrors = min(consecutiveErrors + 1, 10)
             switch error {
             case .httpError(let code) where code == 401 || code == 403:
                 Self.logger.error("Authentication failed (HTTP \(code))")
@@ -170,7 +170,7 @@ final class StatusBarController {
             }
             return
         } catch {
-            consecutiveErrors += 1
+            consecutiveErrors = min(consecutiveErrors + 1, 10)
             Self.logger.error("Failed to fetch self: \((error as NSError).domain) code=\((error as NSError).code)")
             wifiStatus.markError(.controllerUnreachable)
             return

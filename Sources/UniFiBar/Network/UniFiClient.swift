@@ -94,7 +94,9 @@ actor UniFiClient {
 
     func fetchSelfV2() async throws -> SelfInfo {
         let data = try await request("/proxy/network/v2/api/site/default/clients/active")
-        let clients = try JSONDecoder().decode([V2ClientDTO].self, from: data)
+        let allClients = try JSONDecoder().decode([V2ClientDTO].self, from: data)
+        // Sanity cap to prevent memory exhaustion from a compromised controller
+        let clients = allClients.count > 5_000 ? Array(allClients.prefix(5_000)) : allClients
 
         guard let myIP = DeviceDetector.activeIPv4Address() else {
             throw UniFiError.selfNotFound
@@ -150,7 +152,8 @@ actor UniFiClient {
             let body: [String: Any] = ["macs": [mac], "start": oneDayAgo]
             let data = try await post("/proxy/network/api/s/default/stat/session", body: body)
             let response = try JSONDecoder().decode(LegacyResponse<SessionDTO>.self, from: data)
-            return response.data.isEmpty ? nil : response.data
+            let sessions = response.data
+            return sessions.isEmpty ? nil : Array(sessions.prefix(1_000))
         } catch {
             Self.logger.error("Failed to fetch session history: \(Self.safeErrorDescription(error))")
             return nil

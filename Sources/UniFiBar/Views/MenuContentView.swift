@@ -39,9 +39,18 @@ struct MenuContentView: View {
 
     @ViewBuilder
     private var connectedView: some View {
-        coreSections
-        monitoringSections
-        footerTimestamp
+        let content = VStack(alignment: .leading, spacing: 0) {
+            coreSections
+            monitoringSections
+            footerTimestamp
+        }
+        if prefs.scrollableMenu {
+            ScrollView {
+                content
+            }
+        } else {
+            content
+        }
     }
 
     // MARK: - Core sections (Internet, VPN, WiFi/Connection, Session History, Network)
@@ -97,7 +106,7 @@ struct MenuContentView: View {
         }
     }
 
-    // MARK: - Monitoring sections (Alerts, Security, Traffic, Events, DDNS, Port Forwards, Nearby APs)
+    // MARK: - Monitoring sections (Alerts, Security, Traffic, DDNS, Port Forwards, Nearby APs)
 
     @ViewBuilder
     private var monitoringSections: some View {
@@ -112,10 +121,6 @@ struct MenuContentView: View {
 
         if prefs.isSectionEnabled(.traffic), let categories = status.dpiCategories {
             TrafficSection(categories: categories)
-        }
-
-        if prefs.isSectionEnabled(.events), let events = status.siteEvents {
-            EventsSection(events: events)
         }
 
         if prefs.isSectionEnabled(.ddns), let ddns = status.ddnsStatuses {
@@ -179,6 +184,19 @@ struct MenuContentView: View {
                     .foregroundStyle(.red)
                 Button("Open Preferences") {
                     activateAndOpenWindow("preferences")
+                }
+                .buttonStyle(.borderedProminent)
+            case .certChanged:
+                Label("Certificate Changed", systemImage: "lock.shield")
+                    .foregroundStyle(.orange)
+                Text("The controller certificate has changed.\nReset the pin if you renewed it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                Button("Reset Certificate Pin") {
+                    Task {
+                        await controller.resetCertPin()
+                    }
                 }
                 .buttonStyle(.borderedProminent)
             case .notConnected:

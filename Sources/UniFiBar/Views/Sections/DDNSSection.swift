@@ -11,23 +11,20 @@ struct DDNSSection: View {
                         .foregroundStyle(ddns.isActive ? .green : .red)
                         .frame(width: 20, alignment: .center)
                     VStack(alignment: .leading, spacing: 1) {
-                        if let hostname = ddns.hostname {
-                            Text(String(hostname.prefix(128)))
-                                .font(.callout)
-                                .foregroundStyle(.primary)
-                                .lineLimit(1)
-                        }
-                        if let ip = ddns.ip {
-                            Text(ip)
+                        Text(String((ddns.hostName ?? "DDNS").prefix(64)))
+                            .font(.callout)
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        if let service = ddns.service {
+                            Text(service.capitalized)
                                 .font(.caption2)
                                 .foregroundStyle(.tertiary)
-                                .monospacedDigit()
                         }
                     }
                     Spacer()
                     Text(ddns.displayStatus)
                         .font(.callout)
-                        .foregroundStyle(ddns.isActive ? .secondary : .red)
+                        .foregroundStyle(ddns.isActive ? Color.secondary : Color.red)
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 1)

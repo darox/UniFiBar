@@ -13,65 +13,70 @@ struct SetupView: View {
     @State private var retryAvailableAt: Date?
 
     var body: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "wifi.router")
-                .font(.system(size: 48))
-                .foregroundStyle(.tint)
+        VStack(spacing: 24) {
+            header
+            formFields
+            errorMessageView
+            actionButtons
+        }
+        .padding(24)
+        .frame(width: 420, height: 480)
+    }
 
+    private var header: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "wifi.router")
+                .font(.system(size: 40))
+                .foregroundStyle(.tint)
             Text("Set Up UniFiBar")
                 .font(.title2)
                 .fontWeight(.semibold)
-
             Text("Enter your UniFi controller details to get started.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-
-            VStack(alignment: .leading, spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Controller URL")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    TextField("https://192.168.1.1", text: $controllerURL)
-                        .textFieldStyle(.roundedBorder)
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("API Key")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    SecureField("Paste your API key", text: $apiKey)
-                        .textFieldStyle(.roundedBorder)
-                }
-
-                Toggle("Allow self-signed certificates", isOn: $allowSelfSigned)
-                    .font(.callout)
-            }
-
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            }
-
-            HStack {
-                Button("Cancel") {
-                    dismiss()
-                }
-                .keyboardShortcut(.cancelAction)
-
-                Spacer()
-
-                Button("Connect") {
-                    Task { await validate() }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(controllerURL.isEmpty || apiKey.isEmpty || isValidating || isRateLimited)
-                .keyboardShortcut(.defaultAction)
-            }
         }
-        .padding(24)
-        .frame(width: 380)
+    }
+
+    private var formFields: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            LabeledContent("Controller URL") {
+                TextField("https://192.168.1.1", text: $controllerURL)
+                    .textFieldStyle(.roundedBorder)
+            }
+            LabeledContent("API Key") {
+                SecureField("Paste your API key", text: $apiKey)
+                    .textFieldStyle(.roundedBorder)
+            }
+            Toggle("Allow self-signed certificates", isOn: $allowSelfSigned)
+        }
+    }
+
+    @ViewBuilder
+    private var errorMessageView: some View {
+        if let errorMessage {
+            Text(errorMessage)
+                .font(.caption)
+                .foregroundStyle(.red)
+        }
+    }
+
+    private var actionButtons: some View {
+        HStack {
+            Button("Cancel") {
+                dismiss()
+            }
+            .keyboardShortcut(.cancelAction)
+
+            Spacer()
+
+            Button("Connect") {
+                Task { await validate() }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(controllerURL.isEmpty || apiKey.isEmpty || isValidating || isRateLimited)
+            .keyboardShortcut(.defaultAction)
+        }
     }
 
     private var isRateLimited: Bool {
@@ -126,7 +131,6 @@ struct SetupView: View {
                 failedAttempts += 1
                 errorMessage = "Authentication failed. Check your API key."
 
-                // Rate limit only on auth failures (possible brute force)
                 if failedAttempts >= 5 {
                     let delay = min(pow(2.0, Double(failedAttempts - 4)), 30.0)
                     retryAvailableAt = Date().addingTimeInterval(delay)

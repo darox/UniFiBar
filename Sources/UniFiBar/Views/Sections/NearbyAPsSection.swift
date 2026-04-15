@@ -10,7 +10,7 @@ struct NearbyAPsSection: View {
             badgeColor: .secondary,
             defaultExpanded: false
         ) {
-            ForEach(rogueAPs.prefix(6)) { ap in
+            ForEach(rogueAPs) { ap in
                 HStack(spacing: 6) {
                     Image(systemName: ap.isRogue == true ? "wifi.exclamationmark" : "wifi")
                         .foregroundStyle(ap.isRogue == true ? .orange : .secondary)
@@ -34,14 +34,6 @@ struct NearbyAPsSection: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 1)
-            }
-
-            if rogueAPs.count > 6 {
-                Text("+\(rogueAPs.count - 6) more")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 2)
             }
         }
     }

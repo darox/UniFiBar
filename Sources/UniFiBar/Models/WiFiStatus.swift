@@ -90,7 +90,6 @@ final class WiFiStatus {
     var dpiCategories: [DPICategoryDTO]? = nil
     var ipsEvents: [IPSEventDTO]? = nil
     var anomalies: [AnomalyDTO]? = nil
-    var siteEvents: [SiteEventDTO]? = nil
     var ddnsStatuses: [DDNSStatusDTO]? = nil
     var portForwards: [PortForwardDTO]? = nil
     var nearbyAPs: [RogueAPDTO]? = nil
@@ -121,6 +120,7 @@ final class WiFiStatus {
         case controllerUnreachable
         case invalidAPIKey
         case notConnected
+        case certChanged
     }
 
     // MARK: - Display Properties
@@ -136,6 +136,13 @@ final class WiFiStatus {
     }
 
     var statusBarColor: Color {
+        switch errorState {
+        case .controllerUnreachable: return .orange
+        case .invalidAPIKey: return .red
+        case .notConnected: return .gray
+        case .certChanged: return .orange
+        case nil: break
+        }
         if isConnected && isWired { return .blue }
         guard isConnected, let satisfaction else { return .gray }
         switch satisfaction {
@@ -146,6 +153,13 @@ final class WiFiStatus {
     }
 
     var statusBarSymbol: String {
+        switch errorState {
+        case .controllerUnreachable: return "wifi.exclamationmark"
+        case .invalidAPIKey: return "lock.shield"
+        case .notConnected: return "wifi.slash"
+        case .certChanged: return "lock.shield"
+        case nil: break
+        }
         guard isConnected else { return "wifi.slash" }
         if isWired { return "cable.connector.horizontal" }
         guard let satisfaction, satisfaction >= 50 else { return "wifi.exclamationmark" }
@@ -436,7 +450,6 @@ final class WiFiStatus {
         dpi: [DPICategoryDTO]?,
         ips: [IPSEventDTO]?,
         anomalies: [AnomalyDTO]?,
-        events: [SiteEventDTO]?,
         ddns: [DDNSStatusDTO]?,
         portForwards: [PortForwardDTO]?,
         rogueAPs: [RogueAPDTO]?
@@ -445,7 +458,6 @@ final class WiFiStatus {
         self.dpiCategories = dpi
         self.ipsEvents = ips
         self.anomalies = anomalies
-        self.siteEvents = events
         self.ddnsStatuses = ddns
         self.portForwards = portForwards
         self.nearbyAPs = rogueAPs
@@ -463,6 +475,9 @@ final class WiFiStatus {
     func markError(_ error: ErrorState) {
         isConnected = false
         errorState = error
+        // Clear stale connection data so the UI doesn't show ghost values
+        satisfaction = nil
+        signal = nil
         lastUpdated = Date()
     }
 

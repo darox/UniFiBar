@@ -11,7 +11,6 @@ enum MenuSection: String, CaseIterable, Sendable {
     case alerts = "alerts"
     case security = "security"
     case traffic = "traffic"
-    case events = "events"
     case ddns = "ddns"
     case portForwards = "portForwards"
     case nearbyAPs = "nearbyAPs"
@@ -26,7 +25,6 @@ enum MenuSection: String, CaseIterable, Sendable {
         case .alerts: return "Alerts"
         case .security: return "Security (IPS)"
         case .traffic: return "Traffic (DPI)"
-        case .events: return "Recent Events"
         case .ddns: return "Dynamic DNS"
         case .portForwards: return "Port Forwards"
         case .nearbyAPs: return "Nearby APs"
@@ -43,7 +41,6 @@ enum MenuSection: String, CaseIterable, Sendable {
         case .alerts: return "bell.badge"
         case .security: return "shield.lefthalf.filled"
         case .traffic: return "chart.pie"
-        case .events: return "list.bullet"
         case .ddns: return "link"
         case .portForwards: return "arrow.right.arrow.left"
         case .nearbyAPs: return "antenna.radiowaves.left.and.right"
@@ -55,7 +52,7 @@ enum MenuSection: String, CaseIterable, Sendable {
         switch self {
         case .internet, .vpn, .wifi, .network, .sessionHistory, .alerts:
             return true
-        case .security, .traffic, .events, .ddns, .portForwards, .nearbyAPs:
+        case .security, .traffic, .ddns, .portForwards, .nearbyAPs:
             return false
         }
     }
@@ -66,17 +63,19 @@ enum MenuSection: String, CaseIterable, Sendable {
 final class PreferencesManager {
     var isConfigured: Bool = false
     var allowSelfSignedCerts: Bool = false
+    var scrollableMenu: Bool = true
 
     // Section visibility
     private var sectionVisibility: [String: Bool] = [:]
 
     // Cached credentials — read from Keychain once, then reuse
-    private var cachedURL: String?
-    private var cachedAPIKey: String?
+    private(set) var cachedURL: String?
+    private(set) var cachedAPIKey: String?
 
     private let siteIdKey = "com.unifbar.siteId"
     private let selfSignedKey = "com.unifbar.allowSelfSigned"
     private let sectionVisibilityKey = "com.unifbar.sectionVisibility"
+    private let scrollableMenuKey = "com.unifbar.scrollableMenu"
 
     var siteId: String? {
         get { UserDefaults.standard.string(forKey: siteIdKey) }
@@ -85,6 +84,7 @@ final class PreferencesManager {
 
     init() {
         allowSelfSignedCerts = UserDefaults.standard.bool(forKey: selfSignedKey)
+        scrollableMenu = UserDefaults.standard.object(forKey: scrollableMenuKey) as? Bool ?? true
         if let saved = UserDefaults.standard.dictionary(forKey: sectionVisibilityKey) as? [String: Bool] {
             sectionVisibility = saved
         }
@@ -101,7 +101,7 @@ final class PreferencesManager {
 
     /// Returns true if any optional monitoring section is enabled (requiring extra API calls)
     var hasMonitoringSectionsEnabled: Bool {
-        let monitoringSections: [MenuSection] = [.alerts, .security, .traffic, .events, .ddns, .portForwards, .nearbyAPs]
+        let monitoringSections: [MenuSection] = [.alerts, .security, .traffic, .ddns, .portForwards, .nearbyAPs]
         return monitoringSections.contains { isSectionEnabled($0) }
     }
 
@@ -134,6 +134,7 @@ final class PreferencesManager {
         )
     }
 
+
     func save(controllerURL: String, apiKey: String, allowSelfSigned: Bool) async throws {
         try await KeychainHelper.shared.save(controllerURL, for: .controllerURL)
         try await KeychainHelper.shared.save(apiKey, for: .apiKey)
@@ -159,8 +160,10 @@ final class PreferencesManager {
         UserDefaults.standard.removeObject(forKey: siteIdKey)
         UserDefaults.standard.removeObject(forKey: selfSignedKey)
         UserDefaults.standard.removeObject(forKey: sectionVisibilityKey)
+        UserDefaults.standard.removeObject(forKey: scrollableMenuKey)
         sectionVisibility = [:]
         allowSelfSignedCerts = false
+        scrollableMenu = true
         isConfigured = false
     }
 }

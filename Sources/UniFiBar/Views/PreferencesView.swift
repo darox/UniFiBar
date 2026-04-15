@@ -8,102 +8,30 @@ struct PreferencesView: View {
     @State private var controllerURL = ""
     @State private var apiKey = ""
     @State private var allowSelfSigned = false
+    @State private var isEditingCredentials = false
+    @State private var scrollableMenu = true
     @State private var launchAtLogin = false
     @State private var isLoading = true
     @State private var showResetConfirmation = false
     @State private var errorMessage: String?
-    @State private var showSectionSettings = false
 
     var body: some View {
-        VStack(spacing: 20) {
-            Text("Preferences")
-                .font(.title2)
-                .fontWeight(.semibold)
-
+        Group {
             if isLoading {
                 ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                VStack(alignment: .leading, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Controller URL")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        TextField("https://192.168.1.1", text: $controllerURL)
-                            .textFieldStyle(.roundedBorder)
-                    }
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("API Key")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        SecureField("Paste your API key", text: $apiKey)
-                            .textFieldStyle(.roundedBorder)
-                    }
-
-                    Toggle("Allow self-signed certificates", isOn: $allowSelfSigned)
-                        .font(.callout)
-
-                    Toggle("Launch at login", isOn: $launchAtLogin)
-                        .font(.callout)
-                        .onChange(of: launchAtLogin) { _, newValue in
-                            setLaunchAtLogin(newValue)
-                        }
-
-                    if let siteId = controller.preferences.siteId {
-                        HStack {
-                            Text("Site ID")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Text(siteId)
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                                .textSelection(.enabled)
-                        }
-                    }
-
-                    Divider()
-
-                    DisclosureGroup("Visible Sections", isExpanded: $showSectionSettings) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            ForEach(MenuSection.allCases, id: \.rawValue) { section in
-                                SectionToggleRow(section: section, preferences: controller.preferences)
-                            }
-                        }
-                        .padding(.top, 4)
-                    }
-                    .font(.callout)
+                Form {
+                    connectionSection
+                    siteSection
+                    behaviorSection
+                    visibilitySection
+                    resetSection
                 }
-
-                if let errorMessage {
-                    Text(errorMessage)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-
-                HStack {
-                    Button("Reset & Forget", role: .destructive) {
-                        showResetConfirmation = true
-                    }
-
-                    Spacer()
-
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                    .keyboardShortcut(.cancelAction)
-
-                    Button("Save") {
-                        Task { await save() }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(controllerURL.isEmpty || apiKey.isEmpty)
-                    .keyboardShortcut(.defaultAction)
-                }
+                .formStyle(.grouped)
             }
         }
-        .padding(24)
-        .frame(width: 380)
+        .frame(width: 480)
         .task { await loadExisting() }
         .confirmationDialog("Reset UniFiBar?", isPresented: $showResetConfirmation) {
             Button("Reset & Forget", role: .destructive) {
@@ -114,16 +42,134 @@ struct PreferencesView: View {
         }
     }
 
+    // MARK: - Connection
+
+    private var connectionSection: some View {
+        Section {
+            if isEditingCredentials {
+                TextField("Controller URL", text: $controllerURL, prompt: Text("https://192.168.1.1"))
+                SecureField("API Key", text: $apiKey, prompt: Text("Paste your API key"))
+                Toggle("Allow self-signed certificates", isOn: $allowSelfSigned)
+                HStack {
+                    Button("Cancel") {
+                        revertCredentials()
+                    }
+                    Spacer()
+                    Button("Update") {
+                        Task { await save() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(controllerURL.isEmpty || apiKey.isEmpty)
+                }
+            } else {
+                LabeledContent("Controller URL", value: controllerURL)
+                LabeledContent("API Key") {
+                    Button("Change\u{2026}") {
+                        apiKey = ""
+                        isEditingCredentials = true
+                    }
+                    .buttonStyle(.borderless)
+                }
+                LabeledContent("Self-signed certificates") {
+                    Text(allowSelfSigned ? "Allowed" : "Blocked")
+                }
+                Button("Edit Connection\u{2026}") {
+                    isEditingCredentials = true
+                }
+                if allowSelfSigned {
+                    Button("Reset Certificate Pin") {
+                        Task {
+                            await controller.resetCertPin()
+                        }
+                    }
+                }
+            }
+        } header: {
+            Text("Connection")
+        } footer: {
+            if let errorMessage {
+                Text(errorMessage)
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+
+    private var siteSection: some View {
+        Group {
+            if let siteId = controller.preferences.siteId {
+                Section {
+                    LabeledContent("Site ID", value: siteId)
+                } header: {
+                    Text("Site")
+                }
+            }
+        }
+    }
+
+    // MARK: - Behavior
+
+    private var behaviorSection: some View {
+        Section {
+            Toggle("Scrollable menu", isOn: $scrollableMenu)
+                .onChange(of: scrollableMenu) { _, newValue in
+                    controller.preferences.scrollableMenu = newValue
+                    UserDefaults.standard.set(newValue, forKey: "com.unifbar.scrollableMenu")
+                }
+            Toggle("Launch at login", isOn: $launchAtLogin)
+                .onChange(of: launchAtLogin) { _, newValue in
+                    setLaunchAtLogin(newValue)
+                }
+        } header: {
+            Text("Behavior")
+        }
+    }
+
+    // MARK: - Visibility
+
+    private var visibilitySection: some View {
+        Section {
+            ForEach(MenuSection.allCases, id: \.rawValue) { section in
+                SectionToggleRow(section: section, preferences: controller.preferences)
+            }
+        } header: {
+            Text("Visible Sections")
+        }
+    }
+
+    // MARK: - Reset
+
+    private var resetSection: some View {
+        Section {
+            Button("Reset & Forget All Settings\u{2026}", role: .destructive) {
+                showResetConfirmation = true
+            }
+        } footer: {
+            if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
+                Text("UniFiBar v\(version)")
+            }
+        }
+    }
+
+    // MARK: - Actions
+
+    /// Load credentials from Keychain (first load only).
     private func loadExisting() async {
-        if let url = await KeychainHelper.shared.read(.controllerURL) {
-            controllerURL = url
-        }
-        if let key = await KeychainHelper.shared.read(.apiKey) {
-            apiKey = key
-        }
+        await controller.preferences.checkConfiguration()
+        controllerURL = controller.preferences.cachedURL ?? ""
+        apiKey = controller.preferences.cachedAPIKey ?? ""
         allowSelfSigned = controller.preferences.allowSelfSignedCerts
+        scrollableMenu = controller.preferences.scrollableMenu
         launchAtLogin = SMAppService.mainApp.status == .enabled
         isLoading = false
+    }
+
+    /// Revert to cached values without touching Keychain.
+    private func revertCredentials() {
+        controllerURL = controller.preferences.cachedURL ?? ""
+        apiKey = controller.preferences.cachedAPIKey ?? ""
+        allowSelfSigned = controller.preferences.allowSelfSignedCerts
+        isEditingCredentials = false
+        errorMessage = nil
     }
 
     private func save() async {
@@ -146,7 +192,7 @@ struct PreferencesView: View {
             errorMessage = "Invalid URL. Use HTTPS format: https://192.168.1.1"
             return
         }
-        _ = url  // validated
+        _ = url
 
         do {
             try await controller.preferences.save(
@@ -155,7 +201,7 @@ struct PreferencesView: View {
                 allowSelfSigned: allowSelfSigned
             )
             await controller.reconfigure()
-            dismiss()
+            isEditingCredentials = false
         } catch {
             errorMessage = "Failed to save credentials. Please try again."
         }
@@ -198,8 +244,6 @@ private struct SectionToggleRow: View {
         Toggle(isOn: $isEnabled) {
             Label(section.displayName, systemImage: section.icon)
         }
-        .toggleStyle(.checkbox)
-        .font(.callout)
         .onChange(of: isEnabled) { _, newValue in
             preferences.setSectionEnabled(section, enabled: newValue)
         }

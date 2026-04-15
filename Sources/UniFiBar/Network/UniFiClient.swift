@@ -1,12 +1,13 @@
 import CryptoKit
 import Foundation
 import os
-import Security
+@preconcurrency import Security
 
 actor UniFiClient {
     private let baseURL: URL
     private let apiKey: String
     private let session: URLSession
+    private let pinnedCertDelegate: PinnedCertDelegate?
     private var siteId: String?
 
     private static let requestTimeout: TimeInterval = 15
@@ -21,15 +22,32 @@ actor UniFiClient {
         if allowSelfSigned {
             let config = URLSessionConfiguration.default
             config.timeoutIntervalForRequest = Self.requestTimeout
+            let delegate = PinnedCertDelegate(host: baseURL.host() ?? "")
+            self.pinnedCertDelegate = delegate
             self.session = URLSession(
                 configuration: config,
-                delegate: PinnedCertDelegate(host: baseURL.host() ?? ""),
+                delegate: delegate,
                 delegateQueue: nil
             )
         } else {
             let config = URLSessionConfiguration.default
             config.timeoutIntervalForRequest = Self.requestTimeout
+            self.pinnedCertDelegate = nil
             self.session = URLSession(configuration: config)
+        }
+    }
+
+    /// Whether the certificate pin has detected a mismatch (cert changed since first pin).
+    /// Check this when requests fail to distinguish "cert changed" from "controller unreachable".
+    var certificateChanged: Bool {
+        pinnedCertDelegate?.certChanged ?? false
+    }
+
+    /// Clear the stored certificate pin so the next connection re-pins.
+    /// Call this after the user confirms they renewed their controller certificate.
+    func resetCertificatePin() {
+        if let host = baseURL.host() {
+            PinnedCertDelegate.deletePinFromKeychain(host: host)
         }
     }
 
@@ -165,10 +183,13 @@ actor UniFiClient {
     func fetchDevices(siteId: String) async throws -> [DeviceDTO] {
         guard Self.isValidIdentifier(siteId) else { return [] }
         let data = try await request("/proxy/network/integrations/v1/sites/\(siteId)/devices")
+        var devices: [DeviceDTO]
         if let response = try? JSONDecoder().decode(DeviceListResponse.self, from: data) {
-            return response.data
+            devices = response.data
+        } else {
+            devices = try JSONDecoder().decode([DeviceDTO].self, from: data)
         }
-        return try JSONDecoder().decode([DeviceDTO].self, from: data)
+        return devices.count > 500 ? Array(devices.prefix(500)) : devices
     }
 
     // MARK: - VPN Tunnels
@@ -272,24 +293,11 @@ actor UniFiClient {
         }
     }
 
-    // MARK: - Site Events
-
-    func fetchSiteEvents() async -> [SiteEventDTO]? {
-        do {
-            let data = try await request("/proxy/network/api/s/default/stat/event")
-            let response = try JSONDecoder().decode(LegacyResponse<SiteEventDTO>.self, from: data)
-            return response.data.isEmpty ? nil : Array(response.data.prefix(10))
-        } catch {
-            Self.logger.error("Failed to fetch site events: \(Self.safeErrorDescription(error))")
-            return nil
-        }
-    }
-
     // MARK: - Dynamic DNS
 
     func fetchDDNSStatus() async -> [DDNSStatusDTO]? {
         do {
-            let data = try await request("/proxy/network/api/s/default/stat/dynamicdns")
+            let data = try await request("/proxy/network/api/s/default/rest/dynamicdns")
             let response = try JSONDecoder().decode(LegacyResponse<DDNSStatusDTO>.self, from: data)
             return response.data.isEmpty ? nil : Array(response.data.prefix(10))
         } catch {
@@ -320,8 +328,12 @@ actor UniFiClient {
             let data = try await post("/proxy/network/api/s/default/stat/rogueap", body: body)
             let response = try JSONDecoder().decode(LegacyResponse<RogueAPDTO>.self, from: data)
             guard !response.data.isEmpty else { return nil }
-            // Return top 10 by signal strength
-            let sorted = response.data.sorted { ($0.rssi ?? -100) > ($1.rssi ?? -100) }
+            // Return top 10 by signal strength (prefer dBm signal, fall back to rssi)
+            let sorted = response.data.sorted {
+                let lhs = $0.signal ?? ($0.rssi ?? Int.min) - 95
+                let rhs = $1.signal ?? ($1.rssi ?? Int.min) - 95
+                return lhs > rhs
+            }
             return Array(sorted.prefix(10))
         } catch {
             Self.logger.error("Failed to fetch rogue APs: \(Self.safeErrorDescription(error))")
@@ -356,8 +368,8 @@ actor UniFiClient {
 // MARK: - Certificate Pinning Delegate (Trust-On-First-Use)
 
 /// Pins the server certificate on first connection. Subsequent connections must present
-/// the same certificate public key, preventing MITM attacks even with self-signed certs.
-/// On mismatch, the connection is rejected — the user must reset via Preferences to re-pin.
+/// the same certificate public key. On mismatch (e.g. cert renewal or MITM), the connection
+/// is rejected and a specific error is surfaced so the user can intentionally reset the pin.
 final class PinnedCertDelegate: NSObject, URLSessionDelegate, Sendable {
     private let expectedHost: String
     private let keychainKey: String
@@ -366,13 +378,18 @@ final class PinnedCertDelegate: NSObject, URLSessionDelegate, Sendable {
     enum PinState: Sendable {
         case unpinned
         case pinned(Data)
-        case mismatch
+        case certChanged
+    }
+
+    /// Whether a certificate mismatch was detected (set after a failed handshake).
+    /// Check this when a request fails with URLError.cancelledAuthenticationChallenge.
+    var certChanged: Bool {
+        state.withLock { if case .certChanged = $0 { return true }; return false }
     }
 
     init(host: String) {
         self.expectedHost = host
         self.keychainKey = "com.unifbar.cert-pin.\(host)"
-        // Load existing pin from Keychain
         let existingPin = Self.loadPinFromKeychain(key: "com.unifbar.cert-pin.\(host)")
         if let pin = existingPin {
             self.state = OSAllocatedUnfairLock(initialState: .pinned(pin))
@@ -391,25 +408,28 @@ final class PinnedCertDelegate: NSObject, URLSessionDelegate, Sendable {
             return (.performDefaultHandling, nil)
         }
 
-        // Only handle challenges for our expected host
         guard challenge.protectionSpace.host == expectedHost else {
             return (.performDefaultHandling, nil)
         }
 
-        // Extract public key hash from server certificate
-        // If extraction fails, reject — a cert we can't fingerprint is not trustworthy
         guard let serverKeyHash = Self.publicKeyHash(from: serverTrust) else {
             return (.cancelAuthenticationChallenge, nil)
         }
 
-        // Atomic read-check-write to prevent race between concurrent TLS challenges
+        // Validate certificate hasn't expired and hostname matches.
+        // We allow self-signed roots (the whole point of this delegate) but reject expired certs.
+        guard Self.validateCertificate(serverTrust, for: expectedHost) else {
+            return (.cancelAuthenticationChallenge, nil)
+        }
+
         let (decision, shouldPersist): ((URLSession.AuthChallengeDisposition, URLCredential?), Bool) = state.withLock { currentState in
             switch currentState {
             case .pinned(let storedHash):
                 if serverKeyHash == storedHash {
                     return ((.useCredential, URLCredential(trust: serverTrust)), false)
                 } else {
-                    currentState = .mismatch
+                    // Cert changed — could be renewal or MITM. Reject and flag it.
+                    currentState = .certChanged
                     return ((.cancelAuthenticationChallenge, nil), false)
                 }
 
@@ -417,17 +437,33 @@ final class PinnedCertDelegate: NSObject, URLSessionDelegate, Sendable {
                 currentState = .pinned(serverKeyHash)
                 return ((.useCredential, URLCredential(trust: serverTrust)), true)
 
-            case .mismatch:
+            case .certChanged:
                 return ((.cancelAuthenticationChallenge, nil), false)
             }
         }
 
-        // Persist pin to Keychain outside the lock — only on first-use pin
         if shouldPersist {
             Self.savePinToKeychain(key: keychainKey, data: serverKeyHash)
         }
 
         return decision
+    }
+
+    /// Validates certificate expiration and hostname while allowing self-signed roots.
+    private static func validateCertificate(_ trust: SecTrust, for host: String) -> Bool {
+        let policy = SecPolicyCreateSSL(true, host as CFString)
+        SecTrustSetPolicies(trust, policy)
+        // Evaluate — this checks expiration, hostname, etc.
+        // Self-signed certs will fail standard evaluation, which is expected;
+        // the pin check (done separately) is what authorizes them.
+        var error: CFError?
+        let valid = SecTrustEvaluateWithError(trust, &error)
+        // If evaluation fails, check if it's solely due to a self-signed root (which we allow).
+        // A valid pin already confirmed the cert identity, so we only need to reject expired leafs.
+        if !valid, let error, CFErrorGetCode(error) != errSecNotTrusted {
+            return false
+        }
+        return true
     }
 
     /// Extracts SHA-256 hash of the public key from a server trust.

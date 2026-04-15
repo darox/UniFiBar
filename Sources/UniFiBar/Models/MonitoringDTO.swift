@@ -207,64 +207,26 @@ struct AnomalyDTO: Decodable, Sendable, Identifiable {
     }
 }
 
-// MARK: - Site Events
-
-struct SiteEventDTO: Decodable, Sendable, Identifiable {
-    let id: String
-    let key: String?
-    let msg: String?
-    let time: Int?
-    let subsystem: String?
-    let isAdmin: Bool?
-
-    enum CodingKeys: String, CodingKey {
-        case id = "_id"
-        case key, msg, time, subsystem
-        case isAdmin = "is_admin"
-    }
-
-    var displayMessage: String {
-        if let msg { return truncated(msg) }
-        if let key { return truncated(key.replacingOccurrences(of: "EVT_", with: "").replacingOccurrences(of: "_", with: " ").capitalized) }
-        return "Event"
-    }
-
-    var relativeTime: String {
-        guard let time else { return "" }
-        let seconds = TimeInterval(time) / 1000.0
-        guard seconds > 946_684_800 && seconds < 4_102_444_800 else { return "" }
-        let date = Date(timeIntervalSince1970: seconds)
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: date, relativeTo: Date())
-    }
-
-    var subsystemIcon: String {
-        switch subsystem {
-        case "wlan": return "wifi"
-        case "lan": return "cable.connector.horizontal"
-        case "wan": return "globe"
-        case "vpn": return "lock.shield"
-        default: return "info.circle"
-        }
-    }
-}
-
 // MARK: - Dynamic DNS
 
 struct DDNSStatusDTO: Decodable, Sendable {
     let status: String?
-    let ip: String?
-    let hostname: String?
-    let lastChanged: Int?
+    let service: String?
+    let hostName: String?
+    let login: String?
+    let interface: String?
 
     enum CodingKeys: String, CodingKey {
-        case status, ip, hostname
-        case lastChanged = "last_changed"
+        case status, service, login, interface
+        case hostName = "host_name"
     }
 
     var isActive: Bool {
-        status == "good" || status == "nochg"
+        // rest/dynamicdns doesn't always return status — presence implies configured
+        if let status {
+            return status == "good" || status == "nochg"
+        }
+        return service != nil
     }
 
     var displayStatus: String {
@@ -273,6 +235,7 @@ struct DDNSStatusDTO: Decodable, Sendable {
         case "abuse": return "Abuse"
         case "nohost": return "No Host"
         case "badauth": return "Auth Error"
+        case nil: return service != nil ? "Configured" : "Unknown"
         default: return truncated(status?.capitalized ?? "Unknown", maxLength: 32)
         }
     }
@@ -313,26 +276,37 @@ struct PortForwardDTO: Decodable, Sendable, Identifiable {
 // MARK: - Rogue / Neighboring APs
 
 struct RogueAPDTO: Decodable, Sendable, Identifiable {
-    let id: String
+    let _id: String?
     let bssid: String?
     let essid: String?
     let rssi: Int?
+    let signal: Int?
     let channel: Int?
     let isRogue: Bool?
     let age: Int?
     let apMac: String?
 
+    var id: String { _id ?? bssid ?? UUID().uuidString }
+
     enum CodingKeys: String, CodingKey {
-        case id = "_id"
-        case bssid, essid, rssi, channel, age
+        case _id
+        case bssid, essid, rssi, signal, channel, age
         case isRogue = "is_rogue"
         case apMac = "ap_mac"
     }
 
     var signalDescription: String {
-        guard let rssi else { return "—" }
-        // Clamp to physically plausible range
-        let clamped = max(-120, min(0, rssi))
+        // Prefer the 'signal' field (already in dBm, negative).
+        // Fall back to converting rssi: dBm = rssi - 95.
+        let dBm: Int
+        if let signal {
+            dBm = signal
+        } else if let rssi {
+            dBm = rssi - 95
+        } else {
+            return "—"
+        }
+        let clamped = max(-120, min(0, dBm))
         return "\(clamped) dBm"
     }
 

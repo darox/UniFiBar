@@ -31,6 +31,7 @@ final class StatusBarController {
     private var wakeObserver: NSObjectProtocol?
     private var hasStarted = false
     private var consecutiveErrors = 0
+    private var authFailed = false
     private var lastManualRefresh: Date = .distantPast
 
     /// Tears down observers. Must be called on @MainActor before the object is released,
@@ -71,13 +72,20 @@ final class StatusBarController {
     }
 
     func refreshNow() {
-        // Debounce: ignore rapid-fire manual refreshes (min 5s apart)
         let now = Date()
         guard now.timeIntervalSince(lastManualRefresh) >= 5 else { return }
         lastManualRefresh = now
+        authFailed = false
         Task {
             await refresh()
         }
+    }
+
+    func resetCertPin() async {
+        guard let client else { return }
+        await client.resetCertificatePin()
+        // Reconfigure to get a fresh URLSession with a fresh delegate
+        await reconfigure()
     }
 
     private func startPolling() {
@@ -86,16 +94,19 @@ final class StatusBarController {
             guard let self else { return }
             while !Task.isCancelled {
                 await self.refresh()
+                // Stop polling if auth has permanently failed — user must fix credentials
+                if self.authFailed { return }
                 let delay = self.pollInterval
                 try? await Task.sleep(for: .seconds(delay))
             }
         }
     }
 
-    /// Returns poll interval: 30s normally, backs off up to 5 minutes on consecutive errors.
+    /// Returns poll interval: 30s normally, backs off up to 5 minutes on transient errors.
+    /// Auth failures don't back off — they stop polling entirely.
     private var pollInterval: Int {
         guard consecutiveErrors > 0 else { return 30 }
-        return min(30 * (1 << consecutiveErrors), 300)
+        return min(30 * (1 << min(consecutiveErrors, 4)), 300)
     }
 
     func stopPolling() {
@@ -104,7 +115,7 @@ final class StatusBarController {
     }
 
     private func observeSystemEvents() {
-        // Wake from sleep — immediate refresh
+        // Wake from sleep — wait for network, then refresh with reset backoff
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil,
@@ -112,8 +123,14 @@ final class StatusBarController {
         ) { [weak self] _ in
             guard let self else { return }
             Task { @MainActor in
-                try? await Task.sleep(for: .seconds(3))
+                self.consecutiveErrors = 0
+                // Wait longer for Wi-Fi to reassociate after wake
+                try? await Task.sleep(for: .seconds(8))
                 await self.refresh()
+                // If still failing, restart normal polling
+                if !self.authFailed && self.pollTask == nil {
+                    self.startPolling()
+                }
             }
         }
 
@@ -124,7 +141,12 @@ final class StatusBarController {
             guard skipFirst.check() else { return }
             guard let self, path.status == .satisfied else { return }
             Task { @MainActor in
+                self.consecutiveErrors = 0
                 await self.refresh()
+                // If polling had stopped (auth failure), don't restart
+                if !self.authFailed && self.pollTask == nil {
+                    self.startPolling()
+                }
             }
         }
         monitor.start(queue: DispatchQueue(label: "com.unifbar.pathmonitor"))
@@ -144,9 +166,27 @@ final class StatusBarController {
             if preferences.siteId != siteId {
                 preferences.siteId = siteId
             }
+        } catch let error as UniFiError {
+            switch error {
+            case .httpError(let code) where code == 401 || code == 403:
+                Self.logger.error("Auth failed during site discovery (HTTP \(code))")
+                authFailed = true
+                consecutiveErrors = 0
+                wifiStatus.markError(.invalidAPIKey)
+            default:
+                Self.logger.error("Site discovery failed: \((error as NSError).domain) code=\((error as NSError).code)")
+                consecutiveErrors = min(consecutiveErrors + 1, 4)
+                wifiStatus.markError(.controllerUnreachable)
+            }
+            return
         } catch {
+            if await client.certificateChanged {
+                Self.logger.warning("Certificate pin mismatch detected — cert may have been renewed")
+                wifiStatus.markError(.certChanged)
+                return
+            }
             Self.logger.error("Site discovery failed: \((error as NSError).domain) code=\((error as NSError).code)")
-            consecutiveErrors = min(consecutiveErrors + 1, 10)
+            consecutiveErrors = min(consecutiveErrors + 1, 4)
             wifiStatus.markError(.controllerUnreachable)
             return
         }
@@ -156,27 +196,35 @@ final class StatusBarController {
         do {
             selfInfo = try await client.fetchSelfV2()
         } catch let error as UniFiError {
-            consecutiveErrors = min(consecutiveErrors + 1, 10)
             switch error {
             case .httpError(let code) where code == 401 || code == 403:
                 Self.logger.error("Authentication failed (HTTP \(code))")
+                authFailed = true
+                consecutiveErrors = 0
                 wifiStatus.markError(.invalidAPIKey)
             case .selfNotFound:
                 Self.logger.info("This device not found in active clients — likely disconnected")
                 wifiStatus.markDisconnected()
             default:
                 Self.logger.error("Failed to fetch self: \((error as NSError).domain) code=\((error as NSError).code)")
+                consecutiveErrors = min(consecutiveErrors + 1, 4)
                 wifiStatus.markError(.controllerUnreachable)
             }
             return
         } catch {
-            consecutiveErrors = min(consecutiveErrors + 1, 10)
+            if await client.certificateChanged {
+                Self.logger.warning("Certificate pin mismatch detected — cert may have been renewed")
+                wifiStatus.markError(.certChanged)
+                return
+            }
+            consecutiveErrors = min(consecutiveErrors + 1, 4)
             Self.logger.error("Failed to fetch self: \((error as NSError).domain) code=\((error as NSError).code)")
             wifiStatus.markError(.controllerUnreachable)
             return
         }
 
         consecutiveErrors = 0
+        authFailed = false
         wifiStatus.update(from: selfInfo)
 
         let me = selfInfo.client
@@ -239,7 +287,6 @@ final class StatusBarController {
         let wantAlarms = preferences.isSectionEnabled(.alerts)
         let wantTraffic = preferences.isSectionEnabled(.traffic)
         let wantSecurity = preferences.isSectionEnabled(.security)
-        let wantEvents = preferences.isSectionEnabled(.events)
         let wantDDNS = preferences.isSectionEnabled(.ddns)
         let wantPF = preferences.isSectionEnabled(.portForwards)
         let wantRogue = preferences.isSectionEnabled(.nearbyAPs)
@@ -248,7 +295,6 @@ final class StatusBarController {
         async let dpiTask: [DPICategoryDTO]? = wantTraffic ? await client.fetchDPIStats() : nil
         async let ipsTask: [IPSEventDTO]? = wantSecurity ? await client.fetchIPSEvents() : nil
         async let anomaliesTask: [AnomalyDTO]? = wantSecurity ? await client.fetchAnomalies() : nil
-        async let eventsTask: [SiteEventDTO]? = wantEvents ? await client.fetchSiteEvents() : nil
         async let ddnsTask: [DDNSStatusDTO]? = wantDDNS ? await client.fetchDDNSStatus() : nil
         async let pfTask: [PortForwardDTO]? = wantPF ? await client.fetchPortForwards() : nil
         async let rogueTask: [RogueAPDTO]? = wantRogue ? await client.fetchRogueAPs() : nil
@@ -257,7 +303,6 @@ final class StatusBarController {
         let dpi = await dpiTask
         let ips = await ipsTask
         let anomalies = await anomaliesTask
-        let events = await eventsTask
         let ddns = await ddnsTask
         let pf = await pfTask
         let rogue = await rogueTask
@@ -267,7 +312,6 @@ final class StatusBarController {
             dpi: dpi,
             ips: ips,
             anomalies: anomalies,
-            events: events,
             ddns: ddns,
             portForwards: pf,
             rogueAPs: rogue

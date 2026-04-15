@@ -21,10 +21,12 @@ struct UniFiBarApp: App {
             SetupView(controller: controller)
         }
         .windowResizability(.contentSize)
+        .defaultSize(width: 380, height: 440)
 
         Window("Preferences", id: "preferences") {
             PreferencesView(controller: controller)
         }
         .windowResizability(.contentSize)
+        .defaultSize(width: 480, height: 700)
     }
 }

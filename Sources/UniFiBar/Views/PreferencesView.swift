@@ -187,14 +187,15 @@ struct PreferencesView: View {
             }
 
             LabeledContent("Debug Mode") {
-                HStack(spacing: 8) {
-                    Toggle("Fake Update", isOn: Binding(
-                        get: { controller.updateChecker.updateAvailable && controller.updateChecker.latestVersion == "99.99.99" },
-                        set: { _ in controller.updateChecker.toggleDebugUpdate() }
-                    ))
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
+                Toggle(isOn: Binding(
+                    get: { controller.updateChecker.updateAvailable && controller.updateChecker.latestVersion == "99.99.99" },
+                    set: { _ in controller.updateChecker.toggleDebugUpdate() }
+                )) {
+                    EmptyView()
                 }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .labelsHidden()
             }
 
             if !events.isEmpty {

@@ -52,7 +52,62 @@ struct AlarmDTO: Decodable, Sendable, Identifiable {
     }
 }
 
-// MARK: - DPI (Deep Packet Inspection) Stats
+// MARK: - DPI (Deep Packet Inspection) Stats — V2 Traffic API
+
+struct V2TrafficResponse: Decodable, Sendable {
+    let clientUsageByApp: [ClientAppUsage]?
+
+    enum CodingKeys: String, CodingKey {
+        case clientUsageByApp = "client_usage_by_app"
+    }
+
+    func toCategories() -> [DPICategoryDTO] {
+        guard let entries = clientUsageByApp else { return [] }
+        var categoryTotals: [Int: (rx: Int, tx: Int)] = [:]
+        for entry in entries {
+            for usage in entry.usageByApp {
+                let cat = usage.category
+                categoryTotals[cat, default: (0, 0)].rx += usage.rxBytes
+                categoryTotals[cat, default: (0, 0)].tx += usage.txBytes
+            }
+        }
+        return categoryTotals.map { cat, totals in
+            DPICategoryDTO(
+                id: cat,
+                name: DPIStatsResponse.categoryName(cat),
+                rxBytes: totals.rx,
+                txBytes: totals.tx
+            )
+        }
+        .filter { $0.totalBytes > 0 }
+        .sorted { $0.totalBytes > $1.totalBytes }
+    }
+}
+
+struct ClientAppUsage: Decodable, Sendable {
+    let usageByApp: [AppUsage]
+
+    enum CodingKeys: String, CodingKey {
+        case usageByApp = "usage_by_app"
+    }
+}
+
+struct AppUsage: Decodable, Sendable {
+    let category: Int
+    let application: Int?
+    let rxBytes: Int
+    let txBytes: Int
+    let totalBytes: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case category, application
+        case rxBytes = "bytes_received"
+        case txBytes = "bytes_transmitted"
+        case totalBytes = "total_bytes"
+    }
+}
+
+// MARK: - DPI Legacy Stats (kept for reference, unused)
 
 struct DPICategoryDTO: Sendable, Identifiable {
     let id: Int

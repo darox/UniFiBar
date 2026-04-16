@@ -309,7 +309,7 @@ final class StatusBarController {
         wifiStatus.updateGateway(gwStats, device: gwDevice)
 
         // Parallel batch 3: monitoring data (only fetch enabled sections)
-        await fetchMonitoringData(client: client)
+        await fetchMonitoringData(client: client, siteId: siteId)
     }
 
     /// Maps network errors to human-readable reasons for the UI.
@@ -336,7 +336,7 @@ final class StatusBarController {
 
     /// Fetches optional monitoring data based on which sections are enabled in preferences.
     /// Each call is independent and fails silently — monitoring data is best-effort.
-    private func fetchMonitoringData(client: UniFiClient) async {
+    private func fetchMonitoringData(client: UniFiClient, siteId: String) async {
         // Evaluate section visibility on @MainActor before spawning child tasks
         let wantAlarms = preferences.isSectionEnabled(.alerts)
         let wantTraffic = preferences.isSectionEnabled(.traffic)
@@ -346,7 +346,7 @@ final class StatusBarController {
         let wantRogue = preferences.isSectionEnabled(.nearbyAPs)
 
         async let alarmsTask: [AlarmDTO]? = wantAlarms ? await client.fetchAlarms() : nil
-        async let dpiTask: [DPICategoryDTO]? = wantTraffic ? await client.fetchDPIStats() : nil
+        async let dpiTask: [DPICategoryDTO]? = wantTraffic ? await client.fetchDPIStats(siteId: siteId) : nil
         async let ipsTask: [IPSEventDTO]? = wantSecurity ? await client.fetchIPSEvents() : nil
         async let anomaliesTask: [AnomalyDTO]? = wantSecurity ? await client.fetchAnomalies() : nil
         async let ddnsTask: [DDNSStatusDTO]? = wantDDNS ? await client.fetchDDNSStatus() : nil
@@ -360,28 +360,6 @@ final class StatusBarController {
         let ddns = await ddnsTask
         let pf = await pfTask
         let rogue = await rogueTask
-
-        if wantAlarms && alarms == nil {
-            diagnosticsLog.record(.monitoring, level: .warning, message: "Failed to fetch alarms")
-        }
-        if wantTraffic && dpi == nil {
-            diagnosticsLog.record(.monitoring, level: .warning, message: "Failed to fetch DPI stats")
-        }
-        if wantSecurity && ips == nil {
-            diagnosticsLog.record(.monitoring, level: .warning, message: "Failed to fetch IPS events")
-        }
-        if wantSecurity && anomalies == nil {
-            diagnosticsLog.record(.monitoring, level: .warning, message: "Failed to fetch anomalies")
-        }
-        if wantDDNS && ddns == nil {
-            diagnosticsLog.record(.monitoring, level: .warning, message: "Failed to fetch DDNS status")
-        }
-        if wantPF && pf == nil {
-            diagnosticsLog.record(.monitoring, level: .warning, message: "Failed to fetch port forwards")
-        }
-        if wantRogue && rogue == nil {
-            diagnosticsLog.record(.monitoring, level: .warning, message: "Failed to fetch nearby APs")
-        }
 
         wifiStatus.updateMonitoring(
             alarms: alarms,

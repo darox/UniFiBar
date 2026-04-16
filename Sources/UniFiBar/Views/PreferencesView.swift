@@ -26,6 +26,7 @@ struct PreferencesView: View {
                     siteSection
                     behaviorSection
                     visibilitySection
+                    diagnosticsSection
                     resetSection
                 }
                 .formStyle(.grouped)
@@ -133,6 +134,77 @@ struct PreferencesView: View {
             }
         } header: {
             Text("Visible Sections")
+        }
+    }
+
+    // MARK: - Diagnostics
+
+    private var diagnosticsSection: some View {
+        Section {
+            let log = controller.diagnosticsLog
+            let events = log.recentEvents
+
+            LabeledContent("Version") {
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("v\(controller.updateChecker.currentVersion)")
+                    if controller.updateChecker.updateAvailable, let latest = controller.updateChecker.latestVersion {
+                        Button("v\(latest) available") {
+                            if let url = controller.updateChecker.releaseURL {
+                                NSWorkspace.shared.open(url)
+                            }
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.blue)
+                    }
+                }
+            }
+
+            LabeledContent("Consecutive Errors") {
+                Text("\(controller.consecutiveErrorCount)")
+            }
+
+            LabeledContent("Poll Interval") {
+                Text("\(controller.currentPollInterval)s")
+            }
+
+            if !events.isEmpty {
+                DisclosureGroup("Recent Events (\(events.count))") {
+                    ForEach(events.prefix(20)) { event in
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(event.level == .error ? Color.red : event.level == .warning ? Color.orange : Color.green)
+                                .frame(width: 6, height: 6)
+                            Text(event.timestamp.formatted(date: .omitted, time: .shortened))
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                            Text(event.message)
+                                .font(.caption)
+                                .lineLimit(1)
+                            Spacer()
+                        }
+                    }
+                }
+            }
+
+            HStack {
+                Button("Copy Report") {
+                    let report = log.exportText(
+                        errorState: controller.wifiStatus.errorState,
+                        consecutiveErrors: controller.consecutiveErrorCount,
+                        pollInterval: controller.currentPollInterval,
+                        controllerHost: controller.preferences.controllerURL?.host,
+                        allowSelfSignedCerts: controller.preferences.allowSelfSignedCerts
+                    )
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(report, forType: .string)
+                }
+                Spacer()
+                Button("Clear Log") {
+                    log.clear()
+                }
+            }
+        } header: {
+            Text("Diagnostics")
         }
     }
 

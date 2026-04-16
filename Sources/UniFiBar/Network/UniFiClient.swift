@@ -254,12 +254,18 @@ actor UniFiClient {
 
     // MARK: - DPI Stats
 
-    func fetchDPIStats() async -> [DPICategoryDTO]? {
+    func fetchDPIStats(siteId: String) async -> [DPICategoryDTO]? {
+        // Use v2 traffic API (legacy stat/sitedpi returns empty data on Network 9.1+)
         do {
-            let body: [String: Any] = ["type": "by_cat"]
-            let data = try await post("/proxy/network/api/s/default/stat/sitedpi", body: body)
-            let response = try JSONDecoder().decode(DPIStatsResponse.self, from: data)
+            let now = Int(Date().timeIntervalSince1970 * 1000)
+            let start = now - 3_600_000 // last hour
+            let path = "/proxy/network/v2/api/site/\(siteId)/traffic?start=\(start)&end=\(now)&includeUnidentified=true"
+            let data = try await request(path)
+            let response = try JSONDecoder().decode(V2TrafficResponse.self, from: data)
             let categories = response.toCategories()
+            if categories.isEmpty {
+                Self.logger.warning("DPI v2 returned 0 categories from \(response.clientUsageByApp?.count ?? 0) client entries")
+            }
             return categories.isEmpty ? nil : Array(categories.prefix(8))
         } catch {
             Self.logger.error("Failed to fetch DPI stats: \(Self.safeErrorDescription(error))")

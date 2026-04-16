@@ -112,11 +112,11 @@ final class StatusBarController {
         }
     }
 
-    /// Returns poll interval: 30s normally, backs off up to 5 minutes on transient errors.
+    /// Returns poll interval: user-configured normally, backs off up to 5 minutes on transient errors.
     /// Auth failures don't back off — they stop polling entirely.
     private var pollInterval: Int {
-        guard consecutiveErrors > 0 else { return 30 }
-        return min(30 * (1 << min(consecutiveErrors, 4)), 300)
+        guard consecutiveErrors > 0 else { return preferences.pollIntervalSeconds }
+        return min(preferences.pollIntervalSeconds * (1 << min(consecutiveErrors, 4)), 300)
     }
 
     func stopPolling() {

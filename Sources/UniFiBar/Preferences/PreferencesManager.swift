@@ -61,6 +61,7 @@ final class PreferencesManager {
     var isConfigured: Bool = false
     var allowSelfSignedCerts: Bool = false
     var compactMode: Bool = false
+    var pollIntervalSeconds: Int = 30
 
     // Section visibility
     private var sectionVisibility: [String: Bool] = [:]
@@ -73,6 +74,7 @@ final class PreferencesManager {
     private let selfSignedKey = "com.unifbar.allowSelfSigned"
     private let sectionVisibilityKey = "com.unifbar.sectionVisibility"
     private let compactModeKey = "com.unifbar.compactMode"
+    private let pollIntervalKey = "com.unifbar.pollInterval"
 
     var siteId: String? {
         get { UserDefaults.standard.string(forKey: siteIdKey) }
@@ -86,6 +88,7 @@ final class PreferencesManager {
     init() {
         allowSelfSignedCerts = UserDefaults.standard.bool(forKey: selfSignedKey)
         compactMode = UserDefaults.standard.object(forKey: compactModeKey) as? Bool ?? false
+        pollIntervalSeconds = UserDefaults.standard.object(forKey: pollIntervalKey) as? Int ?? 30
         if let saved = UserDefaults.standard.dictionary(forKey: sectionVisibilityKey) as? [String: Bool] {
             sectionVisibility = saved
         }
@@ -147,6 +150,12 @@ final class PreferencesManager {
         isConfigured = true
     }
 
+    func setPollInterval(_ seconds: Int) {
+        let clamped = max(10, min(300, seconds))
+        pollIntervalSeconds = clamped
+        UserDefaults.standard.set(clamped, forKey: pollIntervalKey)
+    }
+
     func resetAll() async {
         // Clear certificate pin for the current controller host from Keychain
         if let urlString = cachedURL, let url = URL(string: urlString), let host = url.host() {
@@ -162,7 +171,9 @@ final class PreferencesManager {
         UserDefaults.standard.removeObject(forKey: selfSignedKey)
         UserDefaults.standard.removeObject(forKey: sectionVisibilityKey)
         UserDefaults.standard.removeObject(forKey: compactModeKey)
+        UserDefaults.standard.removeObject(forKey: pollIntervalKey)
         sectionVisibility = [:]
+        pollIntervalSeconds = 30
         allowSelfSignedCerts = false
         compactMode = false
         isConfigured = false

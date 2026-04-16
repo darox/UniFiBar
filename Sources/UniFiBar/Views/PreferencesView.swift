@@ -10,6 +10,7 @@ struct PreferencesView: View {
     @State private var allowSelfSigned = false
     @State private var isEditingCredentials = false
     @State private var compactMode = true
+    @State private var pollInterval: Int = 30
     @State private var launchAtLogin = false
     @State private var isLoading = true
     @State private var showResetConfirmation = false
@@ -116,6 +117,17 @@ struct PreferencesView: View {
                     controller.preferences.compactMode = newValue
                     UserDefaults.standard.set(newValue, forKey: "com.unifbar.compactMode")
                 }
+            Picker("Poll interval", selection: $pollInterval) {
+                Text("10s").tag(10)
+                Text("15s").tag(15)
+                Text("30s").tag(30)
+                Text("60s").tag(60)
+                Text("120s").tag(120)
+                Text("300s").tag(300)
+            }
+            .onChange(of: pollInterval) { _, newValue in
+                controller.preferences.setPollInterval(newValue)
+            }
             Toggle("Launch at login", isOn: $launchAtLogin)
                 .onChange(of: launchAtLogin) { _, newValue in
                     setLaunchAtLogin(newValue)
@@ -143,6 +155,7 @@ struct PreferencesView: View {
         Section {
             let log = controller.diagnosticsLog
             let events = log.recentEvents
+            let status = controller.wifiStatus
 
             LabeledContent("Version") {
                 VStack(alignment: .trailing, spacing: 2) {
@@ -159,16 +172,38 @@ struct PreferencesView: View {
                 }
             }
 
+            LabeledContent("Status") {
+                if let error = status.errorState {
+                    Text(error.displayTitle).foregroundStyle(.red)
+                } else if status.isConnected {
+                    Text(status.isWired ? "Wired" : "WiFi").foregroundStyle(.green)
+                } else {
+                    Text("—").foregroundStyle(.secondary)
+                }
+            }
+
+            if let ap = status.apName {
+                LabeledContent("AP", value: ap)
+            }
+            if let satisfaction = status.satisfaction {
+                LabeledContent("Experience", value: "\(satisfaction)%")
+            }
+            if let signal = status.signal {
+                LabeledContent("Signal", value: "\(signal) dBm")
+            }
+            if let ip = status.ip {
+                LabeledContent("IP", value: ip)
+            }
+
             LabeledContent("Consecutive Errors") {
                 Text("\(controller.consecutiveErrorCount)")
             }
-
             LabeledContent("Poll Interval") {
                 Text("\(controller.currentPollInterval)s")
             }
 
             if !events.isEmpty {
-                DisclosureGroup("Recent Events (\(events.count))") {
+                DisclosureGroup("Events (\(events.count))") {
                     ForEach(events.prefix(20)) { event in
                         HStack(spacing: 6) {
                             Circle()
@@ -177,9 +212,17 @@ struct PreferencesView: View {
                             Text(event.timestamp.formatted(date: .omitted, time: .shortened))
                                 .font(.system(.caption, design: .monospaced))
                                 .foregroundStyle(.secondary)
-                            Text(event.message)
-                                .font(.caption)
-                                .lineLimit(1)
+                            VStack(alignment: .leading, spacing: 0) {
+                                Text(event.message)
+                                    .font(.caption)
+                                    .lineLimit(1)
+                                if let detail = event.detail {
+                                    Text(detail)
+                                        .font(.system(.caption2, design: .monospaced))
+                                        .foregroundStyle(.tertiary)
+                                        .lineLimit(2)
+                                }
+                            }
                             Spacer()
                         }
                     }
@@ -193,7 +236,8 @@ struct PreferencesView: View {
                         consecutiveErrors: controller.consecutiveErrorCount,
                         pollInterval: controller.currentPollInterval,
                         controllerHost: controller.preferences.controllerURL?.host,
-                        allowSelfSignedCerts: controller.preferences.allowSelfSignedCerts
+                        allowSelfSignedCerts: controller.preferences.allowSelfSignedCerts,
+                        wifiStatus: controller.wifiStatus
                     )
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(report, forType: .string)
@@ -231,6 +275,7 @@ struct PreferencesView: View {
         apiKey = controller.preferences.cachedAPIKey ?? ""
         allowSelfSigned = controller.preferences.allowSelfSignedCerts
         compactMode = controller.preferences.compactMode
+        pollInterval = controller.preferences.pollIntervalSeconds
         launchAtLogin = SMAppService.mainApp.status == .enabled
         isLoading = false
     }

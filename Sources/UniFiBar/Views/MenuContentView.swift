@@ -266,7 +266,8 @@ struct MenuContentView: View {
             consecutiveErrors: controller.consecutiveErrorCount,
             pollInterval: controller.currentPollInterval,
             controllerHost: controller.preferences.controllerURL?.host,
-            allowSelfSignedCerts: controller.preferences.allowSelfSignedCerts
+            allowSelfSignedCerts: controller.preferences.allowSelfSignedCerts,
+            wifiStatus: controller.wifiStatus
         )
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(report, forType: .string)

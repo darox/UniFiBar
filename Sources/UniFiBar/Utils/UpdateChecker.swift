@@ -13,6 +13,20 @@ final class UpdateChecker {
     private let checkInterval: TimeInterval = 86_400 // 24 hours
     private let lastCheckKey = "com.unifbar.lastUpdateCheck"
 
+    /// Debug: toggle a fake update indicator for UI testing. Tap version 5 times in Preferences to trigger.
+    func toggleDebugUpdate() {
+        if updateAvailable && latestVersion == "99.99.99" {
+            // Already in debug mode — turn it off
+            updateAvailable = false
+            latestVersion = nil
+            releaseURL = nil
+        } else {
+            updateAvailable = true
+            latestVersion = "99.99.99"
+            releaseURL = URL(string: "https://github.com/darox/UniFiBar/releases")
+        }
+    }
+
     var currentVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
     }

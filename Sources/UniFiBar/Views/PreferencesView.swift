@@ -12,6 +12,7 @@ struct PreferencesView: View {
     @State private var compactMode = true
     @State private var pollInterval: Int = 30
     @State private var launchAtLogin = false
+    @State private var versionTapCount = 0
     @State private var isLoading = true
     @State private var showResetConfirmation = false
     @State private var errorMessage: String?
@@ -159,10 +160,17 @@ struct PreferencesView: View {
             LabeledContent("Version") {
                 VStack(alignment: .trailing, spacing: 2) {
                     Text("v\(controller.updateChecker.currentVersion)")
+                        .onTapGesture {
+                            versionTapCount += 1
+                            if versionTapCount >= 5 {
+                                versionTapCount = 0
+                                controller.updateChecker.toggleDebugUpdate()
+                            }
+                        }
                     if controller.updateChecker.updateAvailable, let latest = controller.updateChecker.latestVersion {
                         Button("v\(latest) available") {
-                            if let url = controller.updateChecker.releaseURL {
-                                NSWorkspace.shared.open(url)
+                            if controller.updateChecker.releaseURL != nil {
+                                NSWorkspace.shared.open(controller.updateChecker.releaseURL!)
                             }
                         }
                         .buttonStyle(.borderless)

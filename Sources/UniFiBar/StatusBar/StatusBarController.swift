@@ -339,36 +339,45 @@ final class StatusBarController {
     private func fetchMonitoringData(client: UniFiClient, siteId: String) async {
         // Evaluate section visibility on @MainActor before spawning child tasks
         let wantAlarms = preferences.isSectionEnabled(.alerts)
-        let wantTraffic = preferences.isSectionEnabled(.traffic)
         let wantSecurity = preferences.isSectionEnabled(.security)
         let wantDDNS = preferences.isSectionEnabled(.ddns)
         let wantPF = preferences.isSectionEnabled(.portForwards)
         let wantRogue = preferences.isSectionEnabled(.nearbyAPs)
 
-        async let alarmsTask: [AlarmDTO]? = wantAlarms ? await client.fetchAlarms() : nil
-        async let dpiTask: [DPICategoryDTO]? = wantTraffic ? await client.fetchDPIStats(siteId: siteId) : nil
-        async let ipsTask: [IPSEventDTO]? = wantSecurity ? await client.fetchIPSEvents() : nil
-        async let anomaliesTask: [AnomalyDTO]? = wantSecurity ? await client.fetchAnomalies() : nil
-        async let ddnsTask: [DDNSStatusDTO]? = wantDDNS ? await client.fetchDDNSStatus() : nil
-        async let pfTask: [PortForwardDTO]? = wantPF ? await client.fetchPortForwards() : nil
-        async let rogueTask: [RogueAPDTO]? = wantRogue ? await client.fetchRogueAPs() : nil
+        async let alarmsResult = wantAlarms ? await client.fetchAlarms() : (data: nil as [AlarmDTO]?, errorDetail: nil)
+        async let ipsResult = wantSecurity ? await client.fetchIPSEvents() : (data: nil as [IPSEventDTO]?, errorDetail: nil)
+        async let ddnsResult = wantDDNS ? await client.fetchDDNSStatus() : (data: nil as [DDNSStatusDTO]?, errorDetail: nil)
+        async let pfResult = wantPF ? await client.fetchPortForwards() : (data: nil as [PortForwardDTO]?, errorDetail: nil)
+        async let rogueResult = wantRogue ? await client.fetchRogueAPs() : (data: nil as [RogueAPDTO]?, errorDetail: nil)
 
-        let alarms = await alarmsTask
-        let dpi = await dpiTask
-        let ips = await ipsTask
-        let anomalies = await anomaliesTask
-        let ddns = await ddnsTask
-        let pf = await pfTask
-        let rogue = await rogueTask
+        let alarms = await alarmsResult
+        let ips = await ipsResult
+        let ddns = await ddnsResult
+        let pf = await pfResult
+        let rogue = await rogueResult
+
+        if wantAlarms, let error = alarms.errorDetail {
+            diagnosticsLog.record(.monitoring, level: .error, message: "Alarms fetch failed", detail: error)
+        }
+        if wantSecurity, let error = ips.errorDetail {
+            diagnosticsLog.record(.monitoring, level: .error, message: "IPS events fetch failed", detail: error)
+        }
+        if wantDDNS, let error = ddns.errorDetail {
+            diagnosticsLog.record(.monitoring, level: .error, message: "DDNS fetch failed", detail: error)
+        }
+        if wantPF, let error = pf.errorDetail {
+            diagnosticsLog.record(.monitoring, level: .error, message: "Port forwards fetch failed", detail: error)
+        }
+        if wantRogue, let error = rogue.errorDetail {
+            diagnosticsLog.record(.monitoring, level: .error, message: "Rogue APs fetch failed", detail: error)
+        }
 
         wifiStatus.updateMonitoring(
-            alarms: alarms,
-            dpi: dpi,
-            ips: ips,
-            anomalies: anomalies,
-            ddns: ddns,
-            portForwards: pf,
-            rogueAPs: rogue
+            alarms: alarms.data,
+            ips: ips.data,
+            ddns: ddns.data,
+            portForwards: pf.data,
+            rogueAPs: rogue.data
         )
     }
 }

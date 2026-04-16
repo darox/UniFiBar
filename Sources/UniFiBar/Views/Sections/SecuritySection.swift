@@ -2,16 +2,13 @@ import SwiftUI
 
 struct SecuritySection: View {
     let ipsEvents: [IPSEventDTO]?
-    let anomalies: [AnomalyDTO]?
 
     private var totalThreats: Int { ipsEvents?.count ?? 0 }
-    private var totalAnomalies: Int { anomalies?.count ?? 0 }
-    private var totalBadge: Int { totalThreats + totalAnomalies }
 
     var body: some View {
         CollapsibleSectionWithBadge(
             title: "Security",
-            badge: totalBadge,
+            badge: totalThreats,
             badgeColor: totalThreats > 0 ? .red : .yellow,
             defaultExpanded: false
         ) {
@@ -20,14 +17,6 @@ struct SecuritySection: View {
                     label: "Threats Blocked",
                     value: "\(totalThreats)",
                     systemImage: "shield.lefthalf.filled.slash"
-                )
-            }
-
-            if totalAnomalies > 0 {
-                MetricRow(
-                    label: "Anomalies",
-                    value: "\(totalAnomalies)",
-                    systemImage: "waveform.path.ecg"
                 )
             }
 
@@ -60,7 +49,7 @@ struct SecuritySection: View {
                 }
             }
 
-            if totalThreats == 0 && totalAnomalies == 0 {
+            if totalThreats == 0 {
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.shield.fill")
                         .foregroundStyle(.green)

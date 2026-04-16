@@ -164,6 +164,27 @@ actor UniFiClient {
         let data: [T]
     }
 
+    /// Decodes a UniFi API response that may be wrapped in `{ "data": [...] }`
+    /// or may be a bare array `[...]`. Tries LegacyResponse first, then direct array.
+    private static func decodeFlexibleArray<T: Decodable & Sendable>(
+        _ type: T.Type,
+        from data: Data,
+        endpoint: String
+    ) -> [T]? {
+        // Try wrapped format first: { "data": [...] }
+        if let response = try? JSONDecoder().decode(LegacyResponse<T>.self, from: data) {
+            return response.data
+        }
+        // Try bare array: [...]
+        if let array = try? JSONDecoder().decode([T].self, from: data) {
+            return array
+        }
+        // Log diagnostic info about the response
+        let preview = String(data: data.prefix(500), encoding: .utf8) ?? "(non-UTF8)"
+        Self.logger.error("Failed to decode \(endpoint): both formats failed. Response size: \(data.count) bytes, preview: \(preview)")
+        return nil
+    }
+
     func fetchSessionHistory(mac: String) async -> [SessionDTO]? {
         let oneDayAgo = Int(Date.now.timeIntervalSince1970) - 86400
         do {
@@ -240,110 +261,82 @@ actor UniFiClient {
 
     // MARK: - Alarms
 
-    func fetchAlarms() async -> [AlarmDTO]? {
+    /// Returns (data, errorDetail). errorDetail is set when the fetch fails or decode fails.
+    func fetchAlarms() async -> (data: [AlarmDTO]?, errorDetail: String?) {
         do {
             let data = try await request("/proxy/network/api/s/default/rest/alarm")
-            let response = try JSONDecoder().decode(LegacyResponse<AlarmDTO>.self, from: data)
-            let active = response.data.filter { $0.archived != true }
-            return active.isEmpty ? nil : Array(active.prefix(10))
-        } catch {
-            Self.logger.error("Failed to fetch alarms: \(Self.safeErrorDescription(error))")
-            return nil
-        }
-    }
-
-    // MARK: - DPI Stats
-
-    func fetchDPIStats(siteId: String) async -> [DPICategoryDTO]? {
-        // Use v2 traffic API (legacy stat/sitedpi returns empty data on Network 9.1+)
-        do {
-            let now = Int(Date().timeIntervalSince1970 * 1000)
-            let start = now - 3_600_000 // last hour
-            let path = "/proxy/network/v2/api/site/\(siteId)/traffic?start=\(start)&end=\(now)&includeUnidentified=true"
-            let data = try await request(path)
-            let response = try JSONDecoder().decode(V2TrafficResponse.self, from: data)
-            let categories = response.toCategories()
-            if categories.isEmpty {
-                Self.logger.warning("DPI v2 returned 0 categories from \(response.clientUsageByApp?.count ?? 0) client entries")
+            guard let results = Self.decodeFlexibleArray(AlarmDTO.self, from: data, endpoint: "alarms") else {
+                return (nil, "decode failed, \(data.count) bytes")
             }
-            return categories.isEmpty ? nil : Array(categories.prefix(8))
+            let active = results.filter { $0.archived != true }
+            return (active.isEmpty ? nil : Array(active.prefix(10)), nil)
         } catch {
-            Self.logger.error("Failed to fetch DPI stats: \(Self.safeErrorDescription(error))")
-            return nil
+            return (nil, Self.safeErrorDescription(error))
         }
     }
 
     // MARK: - IDS/IPS Events
 
-    func fetchIPSEvents() async -> [IPSEventDTO]? {
+    func fetchIPSEvents() async -> (data: [IPSEventDTO]?, errorDetail: String?) {
         do {
             let data = try await request("/proxy/network/api/s/default/stat/ips/event")
-            let response = try JSONDecoder().decode(LegacyResponse<IPSEventDTO>.self, from: data)
-            return response.data.isEmpty ? nil : Array(response.data.prefix(10))
+            guard let results = Self.decodeFlexibleArray(IPSEventDTO.self, from: data, endpoint: "ips_events") else {
+                return (nil, "decode failed, \(data.count) bytes")
+            }
+            return (results.isEmpty ? nil : Array(results.prefix(10)), nil)
         } catch {
-            Self.logger.error("Failed to fetch IPS events: \(Self.safeErrorDescription(error))")
-            return nil
-        }
-    }
-
-    // MARK: - Anomalies
-
-    func fetchAnomalies() async -> [AnomalyDTO]? {
-        do {
-            let data = try await request("/proxy/network/api/s/default/stat/anomalies")
-            let response = try JSONDecoder().decode(LegacyResponse<AnomalyDTO>.self, from: data)
-            return response.data.isEmpty ? nil : Array(response.data.prefix(10))
-        } catch {
-            Self.logger.error("Failed to fetch anomalies: \(Self.safeErrorDescription(error))")
-            return nil
+            return (nil, Self.safeErrorDescription(error))
         }
     }
 
     // MARK: - Dynamic DNS
 
-    func fetchDDNSStatus() async -> [DDNSStatusDTO]? {
+    func fetchDDNSStatus() async -> (data: [DDNSStatusDTO]?, errorDetail: String?) {
         do {
             let data = try await request("/proxy/network/api/s/default/rest/dynamicdns")
-            let response = try JSONDecoder().decode(LegacyResponse<DDNSStatusDTO>.self, from: data)
-            return response.data.isEmpty ? nil : Array(response.data.prefix(10))
+            guard let results = Self.decodeFlexibleArray(DDNSStatusDTO.self, from: data, endpoint: "ddns") else {
+                return (nil, "decode failed, \(data.count) bytes")
+            }
+            return (results.isEmpty ? nil : Array(results.prefix(10)), nil)
         } catch {
-            Self.logger.error("Failed to fetch DDNS status: \(Self.safeErrorDescription(error))")
-            return nil
+            return (nil, Self.safeErrorDescription(error))
         }
     }
 
     // MARK: - Port Forwards
 
-    func fetchPortForwards() async -> [PortForwardDTO]? {
+    func fetchPortForwards() async -> (data: [PortForwardDTO]?, errorDetail: String?) {
         do {
             let data = try await request("/proxy/network/api/s/default/stat/portforward")
-            let response = try JSONDecoder().decode(LegacyResponse<PortForwardDTO>.self, from: data)
-            let active = response.data.filter { $0.enabled == true }
-            return active.isEmpty ? nil : Array(active.prefix(50))
+            guard let results = Self.decodeFlexibleArray(PortForwardDTO.self, from: data, endpoint: "portforwards") else {
+                return (nil, "decode failed, \(data.count) bytes")
+            }
+            let active = results.filter { $0.enabled == true }
+            return (active.isEmpty ? nil : Array(active.prefix(50)), nil)
         } catch {
-            Self.logger.error("Failed to fetch port forwards: \(Self.safeErrorDescription(error))")
-            return nil
+            return (nil, Self.safeErrorDescription(error))
         }
     }
 
     // MARK: - Rogue / Neighboring APs
 
-    func fetchRogueAPs() async -> [RogueAPDTO]? {
+    func fetchRogueAPs() async -> (data: [RogueAPDTO]?, errorDetail: String?) {
         do {
             let body: [String: Any] = ["within": 24]
             let data = try await post("/proxy/network/api/s/default/stat/rogueap", body: body)
-            let response = try JSONDecoder().decode(LegacyResponse<RogueAPDTO>.self, from: data)
-            guard !response.data.isEmpty else { return nil }
+            guard let results = Self.decodeFlexibleArray(RogueAPDTO.self, from: data, endpoint: "rogueaps") else {
+                return (nil, "decode failed, \(data.count) bytes")
+            }
+            guard !results.isEmpty else { return (nil, nil) }
             // Return top 10 by signal strength (prefer dBm signal, fall back to rssi)
-            let sorted = response.data.sorted {
+            let sorted = results.sorted {
                 let lhs = $0.signal ?? ($0.rssi.map { $0 - 95 } ?? -200)
                 let rhs = $1.signal ?? ($1.rssi.map { $0 - 95 } ?? -200)
                 return lhs > rhs
             }
-            return Array(sorted.prefix(10))
+            return (Array(sorted.prefix(10)), nil)
         } catch {
-            Self.logger.error("Failed to fetch rogue APs: \(Self.safeErrorDescription(error))")
-            return nil
+            return (nil, Self.safeErrorDescription(error))
         }
     }
 
@@ -369,6 +362,7 @@ actor UniFiClient {
         let nsError = error as NSError
         return "\(nsError.domain) code=\(nsError.code)"
     }
+
 }
 
 // MARK: - Certificate Pinning Delegate (Trust-On-First-Use)

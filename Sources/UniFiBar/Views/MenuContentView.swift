@@ -116,12 +116,8 @@ struct MenuContentView: View {
         }
 
         if prefs.isSectionEnabled(.security),
-           (status.ipsEvents != nil) || (status.anomalies != nil) {
-            SecuritySection(ipsEvents: status.ipsEvents, anomalies: status.anomalies)
-        }
-
-        if prefs.isSectionEnabled(.traffic), let categories = status.dpiCategories {
-            TrafficSection(categories: categories)
+           status.ipsEvents != nil {
+            SecuritySection(ipsEvents: status.ipsEvents)
         }
 
         if prefs.isSectionEnabled(.ddns), let ddns = status.ddnsStatuses {

@@ -87,9 +87,7 @@ final class WiFiStatus {
 
     // Monitoring data
     var activeAlarms: [AlarmDTO]? = nil
-    var dpiCategories: [DPICategoryDTO]? = nil
     var ipsEvents: [IPSEventDTO]? = nil
-    var anomalies: [AnomalyDTO]? = nil
     var ddnsStatuses: [DDNSStatusDTO]? = nil
     var portForwards: [PortForwardDTO]? = nil
     var nearbyAPs: [RogueAPDTO]? = nil
@@ -266,18 +264,10 @@ final class WiFiStatus {
         ipsEvents?.count ?? 0
     }
 
-    var anomalyCount: Int {
-        anomalies?.count ?? 0
-    }
-
     var securitySummary: String? {
         let threats = ipsEventCount
-        let anomalyN = anomalyCount
-        guard threats > 0 || anomalyN > 0 else { return nil }
-        var parts: [String] = []
-        if threats > 0 { parts.append("\(threats) threat\(threats == 1 ? "" : "s")") }
-        if anomalyN > 0 { parts.append("\(anomalyN) anomal\(anomalyN == 1 ? "y" : "ies")") }
-        return parts.joined(separator: " · ")
+        guard threats > 0 else { return nil }
+        return "\(threats) threat\(threats == 1 ? "" : "s")"
     }
 
     var nearbyAPCount: Int {
@@ -464,17 +454,13 @@ final class WiFiStatus {
 
     func updateMonitoring(
         alarms: [AlarmDTO]?,
-        dpi: [DPICategoryDTO]?,
         ips: [IPSEventDTO]?,
-        anomalies: [AnomalyDTO]?,
         ddns: [DDNSStatusDTO]?,
         portForwards: [PortForwardDTO]?,
         rogueAPs: [RogueAPDTO]?
     ) {
         self.activeAlarms = alarms
-        self.dpiCategories = dpi
         self.ipsEvents = ips
-        self.anomalies = anomalies
         self.ddnsStatuses = ddns
         self.portForwards = portForwards
         self.nearbyAPs = rogueAPs

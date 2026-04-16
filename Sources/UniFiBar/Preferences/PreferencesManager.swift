@@ -10,7 +10,6 @@ enum MenuSection: String, CaseIterable, Sendable {
     case sessionHistory = "sessionHistory"
     case alerts = "alerts"
     case security = "security"
-    case traffic = "traffic"
     case ddns = "ddns"
     case portForwards = "portForwards"
     case nearbyAPs = "nearbyAPs"
@@ -24,7 +23,6 @@ enum MenuSection: String, CaseIterable, Sendable {
         case .sessionHistory: return "Session History"
         case .alerts: return "Alerts"
         case .security: return "Security (IPS)"
-        case .traffic: return "Traffic (DPI)"
         case .ddns: return "Dynamic DNS"
         case .portForwards: return "Port Forwards"
         case .nearbyAPs: return "Nearby APs"
@@ -40,7 +38,6 @@ enum MenuSection: String, CaseIterable, Sendable {
         case .sessionHistory: return "clock"
         case .alerts: return "bell.badge"
         case .security: return "shield.lefthalf.filled"
-        case .traffic: return "chart.pie"
         case .ddns: return "link"
         case .portForwards: return "arrow.right.arrow.left"
         case .nearbyAPs: return "antenna.radiowaves.left.and.right"
@@ -50,9 +47,9 @@ enum MenuSection: String, CaseIterable, Sendable {
     /// Whether this section is shown by default
     var defaultEnabled: Bool {
         switch self {
-        case .internet, .vpn, .wifi, .network, .sessionHistory, .alerts:
+        case .internet, .vpn, .wifi, .network, .sessionHistory, .alerts, .security:
             return true
-        case .security, .traffic, .ddns, .portForwards, .nearbyAPs:
+        case .ddns, .portForwards, .nearbyAPs:
             return false
         }
     }
@@ -105,7 +102,7 @@ final class PreferencesManager {
 
     /// Returns true if any optional monitoring section is enabled (requiring extra API calls)
     var hasMonitoringSectionsEnabled: Bool {
-        let monitoringSections: [MenuSection] = [.alerts, .security, .traffic, .ddns, .portForwards, .nearbyAPs]
+        let monitoringSections: [MenuSection] = [.alerts, .security, .ddns, .portForwards, .nearbyAPs]
         return monitoringSections.contains { isSectionEnabled($0) }
     }
 

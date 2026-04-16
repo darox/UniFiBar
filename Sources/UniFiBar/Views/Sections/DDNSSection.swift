@@ -5,7 +5,7 @@ struct DDNSSection: View {
 
     var body: some View {
         CollapsibleSection(title: "Dynamic DNS", defaultExpanded: false) {
-            ForEach(Array(statuses.enumerated()), id: \.offset) { _, ddns in
+            ForEach(statuses) { ddns in
                 HStack(spacing: 6) {
                     Image(systemName: ddns.isActive ? "link" : "link.badge.plus")
                         .foregroundStyle(ddns.isActive ? .green : .red)

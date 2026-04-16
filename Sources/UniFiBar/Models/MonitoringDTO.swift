@@ -209,7 +209,7 @@ struct AnomalyDTO: Decodable, Sendable, Identifiable {
 
 // MARK: - Dynamic DNS
 
-struct DDNSStatusDTO: Decodable, Sendable {
+struct DDNSStatusDTO: Decodable, Sendable, Identifiable {
     let status: String?
     let service: String?
     let hostName: String?
@@ -220,6 +220,8 @@ struct DDNSStatusDTO: Decodable, Sendable {
         case status, service, login, interface
         case hostName = "host_name"
     }
+
+    var id: String { "\(hostName ?? "")-\(service ?? "")" }
 
     var isActive: Bool {
         // rest/dynamicdns doesn't always return status — presence implies configured
@@ -286,7 +288,7 @@ struct RogueAPDTO: Decodable, Sendable, Identifiable {
     let age: Int?
     let apMac: String?
 
-    var id: String { _id ?? bssid ?? UUID().uuidString }
+    var id: String { _id ?? bssid ?? "\(essid ?? "")-\(channel ?? 0)-\(apMac ?? "")" }
 
     enum CodingKeys: String, CodingKey {
         case _id

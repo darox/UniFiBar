@@ -330,8 +330,8 @@ actor UniFiClient {
             guard !response.data.isEmpty else { return nil }
             // Return top 10 by signal strength (prefer dBm signal, fall back to rssi)
             let sorted = response.data.sorted {
-                let lhs = $0.signal ?? ($0.rssi ?? Int.min) - 95
-                let rhs = $1.signal ?? ($1.rssi ?? Int.min) - 95
+                let lhs = $0.signal ?? ($0.rssi.map { $0 - 95 } ?? -200)
+                let rhs = $1.signal ?? ($1.rssi.map { $0 - 95 } ?? -200)
                 return lhs > rhs
             }
             return Array(sorted.prefix(10))

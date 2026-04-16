@@ -1,5 +1,5 @@
 [config]
-model = "glm-5.1:cloud"
+model = "openai/glm-5.1:cloud"
 fallback_models = []
 custom_model_max_tokens = 32768
 custom_reasoning_model = true

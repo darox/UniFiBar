@@ -1,0 +1,35 @@
+name: PR Agent
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, reopened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  pr-agent:
+    if: |
+      (github.event_name == 'pull_request' && (
+        github.event.action == 'opened' ||
+        github.event.action == 'ready_for_review' ||
+        github.event.action == 'reopened'
+      )) ||
+      (github.event_name == 'issue_comment' &&
+        startsWith(github.event.comment.body, '/pr-agent'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: PR Agent
+        uses: qodo-ai/pr-agent@d82f7d3e696cd00822694aaa3096265d3889f3f1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
+          OPENAI_API_BASE: ${{ secrets.OPENAI_API_BASE }}
+          CONFIG__MODEL: "glm-5.1:cloud"
+          PR_REVIEWER__ENABLE_AUTO_REVIEW: "true"
+          PR_CODE_SUGGESTIONS__ENABLE_AUTO_CODE_SUGGESTIONS: "true"

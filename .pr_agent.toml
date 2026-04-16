@@ -4,6 +4,7 @@ fallback_models = []
 custom_model_max_tokens = 32768
 
 [pr_reviewer]
+enable_auto_review = true
 extra_instructions = """\
 Focus on security, correctness, and Swift 6 strict concurrency.
 Flag any use of unsafe concurrency patterns, unguarded mutable state, or missing Sendable conformance.
@@ -14,4 +15,5 @@ Check for force unwraps, unbounded arrays, and credential leaks in logs.
 extra_instructions = "Include a security impact assessment in the description."
 
 [pr_code_suggestions]
+enable_auto_code_suggestions = true
 max_suggestions = 4

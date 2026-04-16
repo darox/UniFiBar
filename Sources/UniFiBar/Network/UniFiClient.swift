@@ -451,18 +451,43 @@ final class PinnedCertDelegate: NSObject, URLSessionDelegate, Sendable {
 
     /// Validates certificate expiration and hostname while allowing self-signed roots.
     private static func validateCertificate(_ trust: SecTrust, for host: String) -> Bool {
+        // Check leaf certificate validity dates directly — this reliably
+        // rejects expired certs regardless of chain trust status.
+        guard let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate],
+              let leaf = chain.first
+        else { return false }
+
+        guard Self.isLeafValid(leaf) else { return false }
+
+        // Now evaluate trust. Self-signed certs will fail (errSecNotTrusted)
+        // which we allow, but any other failure (e.g. hostname mismatch) is rejected.
         let policy = SecPolicyCreateSSL(true, host as CFString)
         SecTrustSetPolicies(trust, policy)
-        // Evaluate — this checks expiration, hostname, etc.
-        // Self-signed certs will fail standard evaluation, which is expected;
-        // the pin check (done separately) is what authorizes them.
         var error: CFError?
         let valid = SecTrustEvaluateWithError(trust, &error)
-        // If evaluation fails, check if it's solely due to a self-signed root (which we allow).
-        // A valid pin already confirmed the cert identity, so we only need to reject expired leafs.
         if !valid, let error, CFErrorGetCode(error) != errSecNotTrusted {
             return false
         }
+        return true
+    }
+
+    /// Checks that the leaf certificate is within its validity period (not expired, not not-yet-valid).
+    private static func isLeafValid(_ cert: SecCertificate) -> Bool {
+        // Request validity date OIDs from SecCertificateCopyValues.
+        // Passing an empty array returns all known values.
+        guard let values = SecCertificateCopyValues(cert, [] as CFArray, nil) as? [String: Any] else {
+            return false
+        }
+        let now = Date()
+        // SecCertificateCopyValues uses these OID strings as dictionary keys:
+        //   "1.2.840.113549.1.9.5" = notBefore
+        //   "1.2.840.113549.1.9.6" = notAfter
+        if let notBefore = values["1.2.840.113549.1.9.5"] as? [String: Any],
+           let date = notBefore[kSecPropertyKeyValue as String] as? Date,
+           now < date { return false }
+        if let notAfter = values["1.2.840.113549.1.9.6"] as? [String: Any],
+           let date = notAfter[kSecPropertyKeyValue as String] as? Date,
+           now > date { return false }
         return true
     }
 

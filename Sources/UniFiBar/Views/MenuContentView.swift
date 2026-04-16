@@ -135,13 +135,27 @@ struct MenuContentView: View {
 
     @ViewBuilder
     private var footerTimestamp: some View {
-        if let lastUpdated = status.lastUpdated {
-            Text("Last updated: \(lastUpdated.formatted(date: .omitted, time: .standard))")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
+        VStack(alignment: .leading, spacing: 2) {
+            if let lastUpdated = status.lastUpdated {
+                Text("Last updated: \(lastUpdated.formatted(date: .omitted, time: .standard))")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            if controller.updateChecker.updateAvailable, let latest = controller.updateChecker.latestVersion {
+                Button {
+                    if let url = controller.updateChecker.releaseURL {
+                        NSWorkspace.shared.open(url)
+                    }
+                } label: {
+                    Label("v\(latest) available", systemImage: "arrow.down.circle")
+                        .font(.caption2)
+                        .foregroundStyle(.blue)
+                }
+                .buttonStyle(.plain)
+            }
         }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
     }
 
     // MARK: - Error Views

@@ -38,6 +38,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
           OPENAI_API_BASE: ${{ secrets.OPENAI_API_BASE }}
-          CONFIG__MODEL: "glm-5.1:cloud"
+          CONFIG__MODEL: "openai/glm-5.1:cloud"
           PR_REVIEWER__ENABLE_AUTO_REVIEW: "true"
           PR_CODE_SUGGESTIONS__ENABLE_AUTO_CODE_SUGGESTIONS: "true"

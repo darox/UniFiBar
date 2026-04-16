@@ -26,6 +26,12 @@ struct MenuContentView: View {
             footerActions
         }
         .padding(.vertical, 8)
+        .frame(height: controller.preferences.compactMode ? nil : screenUsableHeight)
+    }
+
+    private var screenUsableHeight: CGFloat {
+        guard let screen = NSScreen.main else { return 600 }
+        return screen.visibleFrame.height - 40
     }
 
     private func activateAndOpenWindow(_ id: String) {
@@ -40,17 +46,12 @@ struct MenuContentView: View {
 
     @ViewBuilder
     private var connectedView: some View {
-        let content = VStack(alignment: .leading, spacing: 0) {
-            coreSections
-            monitoringSections
-            footerTimestamp
-        }
-        if prefs.scrollableMenu {
-            ScrollView {
-                content
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                coreSections
+                monitoringSections
+                footerTimestamp
             }
-        } else {
-            content
         }
     }
 
@@ -347,14 +348,14 @@ struct MenuContentView: View {
                 Button {
                     withAnimation { showDiagnostics.toggle() }
                 } label: {
-                    Label("Diagnostics", systemImage: "stethoscope")
+                    Image(systemName: "stethoscope")
                         .frame(maxWidth: .infinity)
                 }
 
                 Button {
                     activateAndOpenWindow("preferences")
                 } label: {
-                    Label("Preferences", systemImage: "gearshape")
+                    Image(systemName: "gearshape")
                         .frame(maxWidth: .infinity)
                 }
 

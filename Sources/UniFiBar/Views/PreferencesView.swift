@@ -9,7 +9,7 @@ struct PreferencesView: View {
     @State private var apiKey = ""
     @State private var allowSelfSigned = false
     @State private var isEditingCredentials = false
-    @State private var scrollableMenu = true
+    @State private var compactMode = true
     @State private var launchAtLogin = false
     @State private var isLoading = true
     @State private var showResetConfirmation = false
@@ -110,10 +110,10 @@ struct PreferencesView: View {
 
     private var behaviorSection: some View {
         Section {
-            Toggle("Scrollable menu", isOn: $scrollableMenu)
-                .onChange(of: scrollableMenu) { _, newValue in
-                    controller.preferences.scrollableMenu = newValue
-                    UserDefaults.standard.set(newValue, forKey: "com.unifbar.scrollableMenu")
+            Toggle("Compact mode", isOn: $compactMode)
+                .onChange(of: compactMode) { _, newValue in
+                    controller.preferences.compactMode = newValue
+                    UserDefaults.standard.set(newValue, forKey: "com.unifbar.compactMode")
                 }
             Toggle("Launch at login", isOn: $launchAtLogin)
                 .onChange(of: launchAtLogin) { _, newValue in
@@ -158,7 +158,7 @@ struct PreferencesView: View {
         controllerURL = controller.preferences.cachedURL ?? ""
         apiKey = controller.preferences.cachedAPIKey ?? ""
         allowSelfSigned = controller.preferences.allowSelfSignedCerts
-        scrollableMenu = controller.preferences.scrollableMenu
+        compactMode = controller.preferences.compactMode
         launchAtLogin = SMAppService.mainApp.status == .enabled
         isLoading = false
     }

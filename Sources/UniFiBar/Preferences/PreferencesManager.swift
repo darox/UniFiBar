@@ -63,7 +63,7 @@ enum MenuSection: String, CaseIterable, Sendable {
 final class PreferencesManager {
     var isConfigured: Bool = false
     var allowSelfSignedCerts: Bool = false
-    var scrollableMenu: Bool = true
+    var compactMode: Bool = false
 
     // Section visibility
     private var sectionVisibility: [String: Bool] = [:]
@@ -75,7 +75,7 @@ final class PreferencesManager {
     private let siteIdKey = "com.unifbar.siteId"
     private let selfSignedKey = "com.unifbar.allowSelfSigned"
     private let sectionVisibilityKey = "com.unifbar.sectionVisibility"
-    private let scrollableMenuKey = "com.unifbar.scrollableMenu"
+    private let compactModeKey = "com.unifbar.compactMode"
 
     var siteId: String? {
         get { UserDefaults.standard.string(forKey: siteIdKey) }
@@ -88,7 +88,7 @@ final class PreferencesManager {
 
     init() {
         allowSelfSignedCerts = UserDefaults.standard.bool(forKey: selfSignedKey)
-        scrollableMenu = UserDefaults.standard.object(forKey: scrollableMenuKey) as? Bool ?? true
+        compactMode = UserDefaults.standard.object(forKey: compactModeKey) as? Bool ?? false
         if let saved = UserDefaults.standard.dictionary(forKey: sectionVisibilityKey) as? [String: Bool] {
             sectionVisibility = saved
         }
@@ -164,10 +164,10 @@ final class PreferencesManager {
         UserDefaults.standard.removeObject(forKey: siteIdKey)
         UserDefaults.standard.removeObject(forKey: selfSignedKey)
         UserDefaults.standard.removeObject(forKey: sectionVisibilityKey)
-        UserDefaults.standard.removeObject(forKey: scrollableMenuKey)
+        UserDefaults.standard.removeObject(forKey: compactModeKey)
         sectionVisibility = [:]
         allowSelfSignedCerts = false
-        scrollableMenu = true
+        compactMode = false
         isConfigured = false
     }
 }

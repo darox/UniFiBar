@@ -4,6 +4,7 @@ struct MenuContentView: View {
     let controller: StatusBarController
 
     @Environment(\.openWindow) private var openWindow
+    @State private var showDiagnostics = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -138,12 +139,38 @@ struct MenuContentView: View {
 
     @ViewBuilder
     private var footerTimestamp: some View {
-        if let lastUpdated = status.lastUpdated {
-            Text("Last updated: \(lastUpdated.formatted(date: .omitted, time: .standard))")
+        VStack(alignment: .leading, spacing: 2) {
+            if let lastUpdated = status.lastUpdated {
+                Text("Last updated: \(lastUpdated.formatted(date: .omitted, time: .standard))")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            versionLine
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+    }
+
+    @ViewBuilder
+    private var versionLine: some View {
+        let version = controller.updateChecker.currentVersion
+        if controller.updateChecker.updateAvailable, let latest = controller.updateChecker.latestVersion {
+            HStack(spacing: 4) {
+                Text("UniFiBar v\(version)")
+                Text("(v\(latest) available)")
+                    .foregroundStyle(.blue)
+            }
+            .font(.caption2)
+            .foregroundStyle(.quaternary)
+            .onTapGesture {
+                if let url = controller.updateChecker.releaseURL {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+        } else {
+            Text("UniFiBar v\(version)")
                 .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
+                .foregroundStyle(.quaternary)
         }
     }
 
@@ -173,15 +200,27 @@ struct MenuContentView: View {
     private func errorView(_ state: WiFiStatus.ErrorState) -> some View {
         VStack(spacing: 8) {
             switch state {
-            case .controllerUnreachable:
+            case .controllerUnreachable(let reason):
                 Label("Controller Unreachable", systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange)
-                Text("Will retry on next poll cycle.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            case .invalidAPIKey:
+                if let reason {
+                    Text(reason)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                if controller.consecutiveErrorCount > 0 {
+                    Text("Retry in \(controller.currentPollInterval)s · \(controller.consecutiveErrorCount) error\(controller.consecutiveErrorCount == 1 ? "" : "s")")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            case .invalidAPIKey(let httpCode):
                 Label("Invalid API Key", systemImage: "key.slash")
                     .foregroundStyle(.red)
+                if let code = httpCode {
+                    Text("Server returned HTTP \(code)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Button("Open Preferences") {
                     activateAndOpenWindow("preferences")
                 }
@@ -206,38 +245,142 @@ struct MenuContentView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Button {
+                copyDiagnostics()
+            } label: {
+                Label("Copy Diagnostics", systemImage: "doc.on.doc")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
         }
         .frame(maxWidth: .infinity)
         .padding()
+    }
+
+    // MARK: - Diagnostics Section
+
+    @ViewBuilder
+    private var diagnosticsSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            let version = controller.updateChecker.currentVersion
+            Text("UniFiBar v\(version)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if controller.updateChecker.updateAvailable, let latest = controller.updateChecker.latestVersion {
+                Button {
+                    if let url = controller.updateChecker.releaseURL {
+                        NSWorkspace.shared.open(url)
+                    }
+                } label: {
+                    Label("v\(latest) available", systemImage: "arrow.down.circle")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+
+            let events = controller.diagnosticsLog.recentEvents
+            if events.isEmpty {
+                Text("No events recorded")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            } else {
+                ForEach(events.prefix(10)) { event in
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(event.level == .error ? Color.red : event.level == .warning ? Color.orange : Color.green)
+                            .frame(width: 6, height: 6)
+                        Text(event.timestamp.formatted(date: .omitted, time: .shortened))
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                        Text(event.message)
+                            .font(.caption2)
+                            .lineLimit(1)
+                    }
+                }
+            }
+
+            HStack(spacing: 8) {
+                Button {
+                    copyDiagnostics()
+                } label: {
+                    Label("Copy Report", systemImage: "doc.on.doc")
+                        .font(.caption2)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                Button {
+                    controller.diagnosticsLog.clear()
+                } label: {
+                    Label("Clear", systemImage: "trash")
+                        .font(.caption2)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 4)
     }
 
     // MARK: - Footer
 
     @ViewBuilder
     private var footerActions: some View {
-        HStack(spacing: 8) {
-            Button {
-                controller.refreshNow()
-            } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
-                    .frame(maxWidth: .infinity)
+        VStack(spacing: 4) {
+            if showDiagnostics {
+                diagnosticsSection
+                Divider()
             }
 
-            Button {
-                activateAndOpenWindow("preferences")
-            } label: {
-                Label("Preferences", systemImage: "gearshape")
-                    .frame(maxWidth: .infinity)
-            }
+            HStack(spacing: 8) {
+                Button {
+                    controller.refreshNow()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .frame(maxWidth: .infinity)
+                }
 
-            Button {
-                NSApplication.shared.terminate(nil)
-            } label: {
-                Label("Quit", systemImage: "xmark")
-                    .frame(maxWidth: .infinity)
+                Button {
+                    withAnimation { showDiagnostics.toggle() }
+                } label: {
+                    Label("Diagnostics", systemImage: "stethoscope")
+                        .frame(maxWidth: .infinity)
+                }
+
+                Button {
+                    activateAndOpenWindow("preferences")
+                } label: {
+                    Label("Preferences", systemImage: "gearshape")
+                        .frame(maxWidth: .infinity)
+                }
+
+                Button {
+                    NSApplication.shared.terminate(nil)
+                } label: {
+                    Image(systemName: "xmark")
+                        .frame(maxWidth: .infinity)
+                }
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 2)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 2)
+    }
+
+    // MARK: - Actions
+
+    private func copyDiagnostics() {
+        let report = controller.diagnosticsLog.exportText(
+            errorState: controller.wifiStatus.errorState,
+            consecutiveErrors: controller.consecutiveErrorCount,
+            pollInterval: controller.currentPollInterval,
+            controllerHost: controller.preferences.controllerURL?.host,
+            allowSelfSignedCerts: controller.preferences.allowSelfSignedCerts
+        )
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(report, forType: .string)
     }
 }

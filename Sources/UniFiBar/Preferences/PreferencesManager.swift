@@ -82,6 +82,10 @@ final class PreferencesManager {
         set { UserDefaults.standard.set(newValue, forKey: siteIdKey) }
     }
 
+    var controllerURL: URL? {
+        cachedURL.flatMap { URL(string: $0) }
+    }
+
     init() {
         allowSelfSignedCerts = UserDefaults.standard.bool(forKey: selfSignedKey)
         scrollableMenu = UserDefaults.standard.object(forKey: scrollableMenuKey) as? Bool ?? true

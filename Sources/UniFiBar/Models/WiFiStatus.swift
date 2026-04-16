@@ -117,10 +117,27 @@ final class WiFiStatus {
     }
 
     enum ErrorState: Sendable {
-        case controllerUnreachable
-        case invalidAPIKey
+        case controllerUnreachable(reason: String?)
+        case invalidAPIKey(httpCode: Int?)
         case notConnected
         case certChanged
+
+        var displayTitle: String {
+            switch self {
+            case .controllerUnreachable: return "Controller Unreachable"
+            case .invalidAPIKey: return "Invalid API Key"
+            case .notConnected: return "Not Connected"
+            case .certChanged: return "Certificate Changed"
+            }
+        }
+
+        var displayReason: String? {
+            switch self {
+            case .controllerUnreachable(let reason): return reason
+            case .invalidAPIKey(let code): return code.map { "HTTP \($0)" }
+            case .notConnected, .certChanged: return nil
+            }
+        }
     }
 
     // MARK: - Display Properties
@@ -137,8 +154,8 @@ final class WiFiStatus {
 
     var statusBarColor: Color {
         switch errorState {
-        case .controllerUnreachable: return .orange
-        case .invalidAPIKey: return .red
+        case .controllerUnreachable(_): return .orange
+        case .invalidAPIKey(_): return .red
         case .notConnected: return .gray
         case .certChanged: return .orange
         case nil: break
@@ -154,8 +171,8 @@ final class WiFiStatus {
 
     var statusBarSymbol: String {
         switch errorState {
-        case .controllerUnreachable: return "wifi.exclamationmark"
-        case .invalidAPIKey: return "lock.shield"
+        case .controllerUnreachable(_): return "wifi.exclamationmark"
+        case .invalidAPIKey(_): return "lock.shield"
         case .notConnected: return "wifi.slash"
         case .certChanged: return "lock.shield"
         case nil: break

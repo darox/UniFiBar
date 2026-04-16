@@ -22,6 +22,8 @@ private final class SkipFirstFlag: Sendable {
 final class StatusBarController {
     let wifiStatus = WiFiStatus()
     let preferences = PreferencesManager()
+    let diagnosticsLog = DiagnosticsLog()
+    let updateChecker = UpdateChecker()
 
     private static let logger = Logger(subsystem: "com.unifbar.app", category: "StatusBarController")
 
@@ -33,6 +35,10 @@ final class StatusBarController {
     private var consecutiveErrors = 0
     private var authFailed = false
     private var lastManualRefresh: Date = .distantPast
+    private var successCount = 0
+
+    var consecutiveErrorCount: Int { consecutiveErrors }
+    var currentPollInterval: Int { pollInterval }
 
     /// Tears down observers. Must be called on @MainActor before the object is released,
     /// since `deinit` is nonisolated in Swift 6 and cannot safely access actor-isolated state.
@@ -50,6 +56,10 @@ final class StatusBarController {
     func start() async {
         guard !hasStarted else { return }
         hasStarted = true
+
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let macOS = ProcessInfo.processInfo.operatingSystemVersionString
+        diagnosticsLog.record(.system, level: .info, message: "UniFiBar started", detail: "v\(version) macOS \(macOS)")
 
         await preferences.checkConfiguration()
         guard preferences.isConfigured else { return }
@@ -155,7 +165,7 @@ final class StatusBarController {
 
     private func refresh() async {
         guard let client else {
-            wifiStatus.markError(.controllerUnreachable)
+            wifiStatus.markError(.controllerUnreachable(reason: "Not configured"))
             return
         }
 
@@ -170,24 +180,30 @@ final class StatusBarController {
             switch error {
             case .httpError(let code) where code == 401 || code == 403:
                 Self.logger.error("Auth failed during site discovery (HTTP \(code))")
+                diagnosticsLog.record(.authentication, level: .error, message: "Auth failed during site discovery", detail: "HTTP \(code)")
                 authFailed = true
                 consecutiveErrors = 0
-                wifiStatus.markError(.invalidAPIKey)
+                wifiStatus.markError(.invalidAPIKey(httpCode: code))
             default:
                 Self.logger.error("Site discovery failed: \((error as NSError).domain) code=\((error as NSError).code)")
+                let detail = "\((error as NSError).domain) code=\((error as NSError).code)"
+                diagnosticsLog.record(.connection, level: .error, message: "Site discovery failed", detail: detail)
                 consecutiveErrors = min(consecutiveErrors + 1, 4)
-                wifiStatus.markError(.controllerUnreachable)
+                wifiStatus.markError(.controllerUnreachable(reason: Self.reasonFromError(error)))
             }
             return
         } catch {
             if await client.certificateChanged {
                 Self.logger.warning("Certificate pin mismatch detected — cert may have been renewed")
+                diagnosticsLog.record(.certificate, level: .warning, message: "Certificate pin mismatch detected")
                 wifiStatus.markError(.certChanged)
                 return
             }
-            Self.logger.error("Site discovery failed: \((error as NSError).domain) code=\((error as NSError).code)")
+            let detail = "\((error as NSError).domain) code=\((error as NSError).code)"
+            Self.logger.error("Site discovery failed: \(detail)")
+            diagnosticsLog.record(.connection, level: .error, message: "Site discovery failed", detail: detail)
             consecutiveErrors = min(consecutiveErrors + 1, 4)
-            wifiStatus.markError(.controllerUnreachable)
+            wifiStatus.markError(.controllerUnreachable(reason: Self.reasonFromError(error)))
             return
         }
 
@@ -199,33 +215,49 @@ final class StatusBarController {
             switch error {
             case .httpError(let code) where code == 401 || code == 403:
                 Self.logger.error("Authentication failed (HTTP \(code))")
+                diagnosticsLog.record(.authentication, level: .error, message: "Authentication failed", detail: "HTTP \(code)")
                 authFailed = true
                 consecutiveErrors = 0
-                wifiStatus.markError(.invalidAPIKey)
+                wifiStatus.markError(.invalidAPIKey(httpCode: code))
             case .selfNotFound:
                 Self.logger.info("This device not found in active clients — likely disconnected")
+                diagnosticsLog.record(.connection, level: .info, message: "Device not found in active clients")
                 wifiStatus.markDisconnected()
             default:
                 Self.logger.error("Failed to fetch self: \((error as NSError).domain) code=\((error as NSError).code)")
+                let detail = "\((error as NSError).domain) code=\((error as NSError).code)"
+                diagnosticsLog.record(.connection, level: .error, message: "Failed to fetch self", detail: detail)
                 consecutiveErrors = min(consecutiveErrors + 1, 4)
-                wifiStatus.markError(.controllerUnreachable)
+                wifiStatus.markError(.controllerUnreachable(reason: Self.reasonFromError(error)))
             }
             return
         } catch {
             if await client.certificateChanged {
                 Self.logger.warning("Certificate pin mismatch detected — cert may have been renewed")
+                diagnosticsLog.record(.certificate, level: .warning, message: "Certificate pin mismatch detected")
                 wifiStatus.markError(.certChanged)
                 return
             }
             consecutiveErrors = min(consecutiveErrors + 1, 4)
-            Self.logger.error("Failed to fetch self: \((error as NSError).domain) code=\((error as NSError).code)")
-            wifiStatus.markError(.controllerUnreachable)
+            let detail = "\((error as NSError).domain) code=\((error as NSError).code)"
+            Self.logger.error("Failed to fetch self: \(detail)")
+            diagnosticsLog.record(.connection, level: .error, message: "Failed to fetch self", detail: detail)
+            wifiStatus.markError(.controllerUnreachable(reason: Self.reasonFromError(error)))
             return
         }
 
         consecutiveErrors = 0
         authFailed = false
         wifiStatus.update(from: selfInfo)
+
+        successCount += 1
+        if successCount % 10 == 0 {
+            diagnosticsLog.record(.connection, level: .info, message: "Poll succeeded", detail: "\(successCount) consecutive")
+        }
+
+        if successCount == 1 {
+            updateChecker.schedulePeriodicCheck()
+        }
 
         let me = selfInfo.client
 
@@ -280,6 +312,28 @@ final class StatusBarController {
         await fetchMonitoringData(client: client)
     }
 
+    /// Maps network errors to human-readable reasons for the UI.
+    private static func reasonFromError(_ error: Error) -> String? {
+        let nsError = error as NSError
+        guard nsError.domain == NSURLErrorDomain else {
+            return "\(nsError.domain) code=\(nsError.code)"
+        }
+        switch nsError.code {
+        case NSURLErrorCannotFindHost: return "DNS lookup failed"
+        case NSURLErrorDNSLookupFailed: return "DNS lookup failed"
+        case NSURLErrorTimedOut: return "Connection timed out"
+        case NSURLErrorCannotConnectToHost: return "Connection refused"
+        case NSURLErrorNetworkConnectionLost: return "Network connection lost"
+        case NSURLErrorNotConnectedToInternet: return "No internet connection"
+        case NSURLErrorSecureConnectionFailed: return "TLS handshake failed"
+        case NSURLErrorServerCertificateHasBadDate: return "Server certificate expired"
+        case NSURLErrorServerCertificateUntrusted: return "Server certificate untrusted"
+        case NSURLErrorServerCertificateHasUnknownRoot: return "Self-signed certificate"
+        case NSURLErrorClientCertificateRejected: return "Client certificate rejected"
+        default: return "Network error (\(nsError.code))"
+        }
+    }
+
     /// Fetches optional monitoring data based on which sections are enabled in preferences.
     /// Each call is independent and fails silently — monitoring data is best-effort.
     private func fetchMonitoringData(client: UniFiClient) async {
@@ -306,6 +360,28 @@ final class StatusBarController {
         let ddns = await ddnsTask
         let pf = await pfTask
         let rogue = await rogueTask
+
+        if wantAlarms && alarms == nil {
+            diagnosticsLog.record(.monitoring, level: .warning, message: "Failed to fetch alarms")
+        }
+        if wantTraffic && dpi == nil {
+            diagnosticsLog.record(.monitoring, level: .warning, message: "Failed to fetch DPI stats")
+        }
+        if wantSecurity && ips == nil {
+            diagnosticsLog.record(.monitoring, level: .warning, message: "Failed to fetch IPS events")
+        }
+        if wantSecurity && anomalies == nil {
+            diagnosticsLog.record(.monitoring, level: .warning, message: "Failed to fetch anomalies")
+        }
+        if wantDDNS && ddns == nil {
+            diagnosticsLog.record(.monitoring, level: .warning, message: "Failed to fetch DDNS status")
+        }
+        if wantPF && pf == nil {
+            diagnosticsLog.record(.monitoring, level: .warning, message: "Failed to fetch port forwards")
+        }
+        if wantRogue && rogue == nil {
+            diagnosticsLog.record(.monitoring, level: .warning, message: "Failed to fetch nearby APs")
+        }
 
         wifiStatus.updateMonitoring(
             alarms: alarms,

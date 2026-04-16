@@ -1,0 +1,17 @@
+[config]
+model = "glm-5.1:cloud"
+fallback_models = []
+custom_model_max_tokens = 32768
+
+[pr_reviewer]
+extra_instructions = """\
+Focus on security, correctness, and Swift 6 strict concurrency.
+Flag any use of unsafe concurrency patterns, unguarded mutable state, or missing Sendable conformance.
+Check for force unwraps, unbounded arrays, and credential leaks in logs.
+"""
+
+[pr_description]
+extra_instructions = "Include a security impact assessment in the description."
+
+[pr_code_suggestions]
+max_suggestions = 4

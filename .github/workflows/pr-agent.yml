@@ -21,7 +21,14 @@ jobs:
         github.event.action == 'synchronize'
       )) ||
       (github.event_name == 'issue_comment' &&
-        startsWith(github.event.comment.body, '/pr-agent'))
+        github.event.sender.type != 'Bot' && (
+          startsWith(github.event.comment.body, '/review') ||
+          startsWith(github.event.comment.body, '/improve') ||
+          startsWith(github.event.comment.body, '/describe') ||
+          startsWith(github.event.comment.body, '/update_changelog') ||
+          startsWith(github.event.comment.body, '/add_docs') ||
+          startsWith(github.event.comment.body, '/pr-agent')
+        ))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

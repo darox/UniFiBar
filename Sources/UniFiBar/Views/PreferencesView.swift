@@ -186,6 +186,17 @@ struct PreferencesView: View {
                 Text("\(controller.currentPollInterval)s")
             }
 
+            LabeledContent("Debug Mode") {
+                HStack(spacing: 8) {
+                    Toggle("Fake Update", isOn: Binding(
+                        get: { controller.updateChecker.updateAvailable && controller.updateChecker.latestVersion == "99.99.99" },
+                        set: { _ in controller.updateChecker.toggleDebugUpdate() }
+                    ))
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                }
+            }
+
             if !events.isEmpty {
                 DisclosureGroup("Events (\(events.count))") {
                     ForEach(events.prefix(20)) { event in

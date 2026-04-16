@@ -155,7 +155,6 @@ struct PreferencesView: View {
         Section {
             let log = controller.diagnosticsLog
             let events = log.recentEvents
-            let status = controller.wifiStatus
 
             LabeledContent("Version") {
                 VStack(alignment: .trailing, spacing: 2) {
@@ -170,29 +169,6 @@ struct PreferencesView: View {
                         .foregroundStyle(.blue)
                     }
                 }
-            }
-
-            LabeledContent("Status") {
-                if let error = status.errorState {
-                    Text(error.displayTitle).foregroundStyle(.red)
-                } else if status.isConnected {
-                    Text(status.isWired ? "Wired" : "WiFi").foregroundStyle(.green)
-                } else {
-                    Text("—").foregroundStyle(.secondary)
-                }
-            }
-
-            if let ap = status.apName {
-                LabeledContent("AP", value: ap)
-            }
-            if let satisfaction = status.satisfaction {
-                LabeledContent("Experience", value: "\(satisfaction)%")
-            }
-            if let signal = status.signal {
-                LabeledContent("Signal", value: "\(signal) dBm")
-            }
-            if let ip = status.ip {
-                LabeledContent("IP", value: ip)
             }
 
             LabeledContent("Consecutive Errors") {

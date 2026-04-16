@@ -116,7 +116,6 @@ final class DiagnosticsLog {
         lines.append("")
         lines.append("[WAN]")
         if let wanUp = wifiStatus.wanIsUp { lines.append("WAN Up: \(wanUp)") }
-        if let wanIP = wifiStatus.wanIP { lines.append("WAN IP: \(wanIP)") }
         if let isp = wifiStatus.wanISP { lines.append("ISP: \(isp)") }
         if let latency = wifiStatus.wanLatencyMs { lines.append("Latency: \(latency) ms") }
         if let avail = wifiStatus.formattedWANAvailability { lines.append("Availability: \(avail)") }

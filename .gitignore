@@ -5,6 +5,7 @@ DerivedData/
 .swiftpm/
 /tmp/
 unifbar-debug.log
+.env
 
 # Debug scripts with credential access
 Scripts/api_debug.swift

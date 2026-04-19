@@ -48,6 +48,38 @@ struct V2ClientDTO: Decodable, Sendable {
     let ccq: Int?
     let gwMac: String?
 
+    /// Minimal init for wired connections not found in UniFi client list.
+    /// Only the IP is known; all other fields are nil.
+    init(ip: String, mac: String? = nil, hostname: String? = nil, displayName: String? = nil, signal: Int? = nil, rssi: Int? = nil, noise: Int? = nil, satisfaction: Int? = nil, wifiExperienceScore: Int? = nil, wifiExperienceAverage: Int? = nil, wifiTxRetriesPercentage: Double? = nil, channel: Int? = nil, channelWidth: Int? = nil, radioProto: String? = nil, radio: String? = nil, essid: String? = nil, apMac: String? = nil, lastUplinkName: String? = nil, rxRate: Int? = nil, txRate: Int? = nil, rxBytes: Int? = nil, txBytes: Int? = nil, uptime: Int? = nil, mimo: String? = nil, roamCount: Int? = nil, ccq: Int? = nil, gwMac: String? = nil) {
+        self.mac = mac
+        self.ip = ip
+        self.hostname = hostname
+        self.displayName = displayName
+        self.signal = signal
+        self.rssi = rssi
+        self.noise = noise
+        self.satisfaction = satisfaction
+        self.wifiExperienceScore = wifiExperienceScore
+        self.wifiExperienceAverage = wifiExperienceAverage
+        self.wifiTxRetriesPercentage = wifiTxRetriesPercentage
+        self.channel = channel
+        self.channelWidth = channelWidth
+        self.radioProto = radioProto
+        self.radio = radio
+        self.essid = essid
+        self.apMac = apMac
+        self.lastUplinkName = lastUplinkName
+        self.rxRate = rxRate
+        self.txRate = txRate
+        self.rxBytes = rxBytes
+        self.txBytes = txBytes
+        self.uptime = uptime
+        self.mimo = mimo
+        self.roamCount = roamCount
+        self.ccq = ccq
+        self.gwMac = gwMac
+    }
+
     enum CodingKeys: String, CodingKey {
         case mac, ip, hostname, signal, rssi, noise, satisfaction, channel, radio, essid, uptime, ccq
         case displayName = "display_name"

@@ -4,6 +4,10 @@ fallback_models = []
 custom_model_max_tokens = 32768
 custom_reasoning_model = true
 
+[github_app]
+handle_push_trigger = true
+push_commands = ["/review"]
+
 [pr_reviewer]
 enable_auto_review = true
 extra_instructions = """\

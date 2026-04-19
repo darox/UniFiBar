@@ -25,6 +25,7 @@ final class WiFiStatus {
     var mimoDescription: String? = nil
     var rxRate: Int? = nil
     var txRate: Int? = nil
+    var txRetriesPct: Double? = nil
     var rxBytes: Int? = nil
     var txBytes: Int? = nil
     var ip: String? = nil
@@ -81,6 +82,14 @@ final class WiFiStatus {
     var onlineDevices: Int? = nil
     var offlineDeviceNames: [String]? = nil
 
+    // Speed test
+    var speedTest: SpeedTestResult? = nil
+
+    // Monitoring data
+    var ddnsStatuses: [DDNSStatusDTO]? = nil
+    var portForwards: [PortForwardDTO]? = nil
+    var nearbyAPs: [RogueAPDTO]? = nil
+
     // Metadata
     var lastUpdated: Date? = nil
 
@@ -103,10 +112,28 @@ final class WiFiStatus {
         let fraction: Double
     }
 
-    enum ErrorState: Sendable {
-        case controllerUnreachable
-        case invalidAPIKey
+    enum ErrorState: Sendable, Equatable {
+        case controllerUnreachable(reason: String?)
+        case invalidAPIKey(httpCode: Int?)
         case notConnected
+        case certChanged
+
+        var displayTitle: String {
+            switch self {
+            case .controllerUnreachable: return "Controller Unreachable"
+            case .invalidAPIKey: return "Invalid API Key"
+            case .notConnected: return "Not Connected"
+            case .certChanged: return "Certificate Changed"
+            }
+        }
+
+        var displayReason: String? {
+            switch self {
+            case .controllerUnreachable(let reason): return reason
+            case .invalidAPIKey(let code): return code.map { "HTTP \($0)" }
+            case .notConnected, .certChanged: return nil
+            }
+        }
     }
 
     // MARK: - Display Properties
@@ -122,6 +149,13 @@ final class WiFiStatus {
     }
 
     var statusBarColor: Color {
+        switch errorState {
+        case .controllerUnreachable(_): return .orange
+        case .invalidAPIKey(_): return .red
+        case .notConnected: return .gray
+        case .certChanged: return .orange
+        case nil: break
+        }
         if isConnected && isWired { return .blue }
         guard isConnected, let satisfaction else { return .gray }
         switch satisfaction {
@@ -132,6 +166,13 @@ final class WiFiStatus {
     }
 
     var statusBarSymbol: String {
+        switch errorState {
+        case .controllerUnreachable(_): return "wifi.exclamationmark"
+        case .invalidAPIKey(_): return "lock.shield"
+        case .notConnected: return "wifi.slash"
+        case .certChanged: return "lock.shield"
+        case nil: break
+        }
         guard isConnected else { return "wifi.slash" }
         if isWired { return "cable.connector.horizontal" }
         guard let satisfaction, satisfaction >= 50 else { return "wifi.exclamationmark" }
@@ -159,6 +200,11 @@ final class WiFiStatus {
     var formattedRoamCount: String? {
         guard let count = roamCount else { return nil }
         return "\(count) roam\(count == 1 ? "" : "s")"
+    }
+
+    var formattedTxRetries: String? {
+        guard let pct = txRetriesPct, pct > 0 else { return nil }
+        return String(format: "%.1f%%", pct)
     }
 
     var formattedAPLoad: String? {
@@ -208,6 +254,10 @@ final class WiFiStatus {
         return "\(online) online · \(offline) offline"
     }
 
+    var nearbyAPCount: Int {
+        nearbyAPs?.count ?? 0
+    }
+
     var firmwareBadge: String? {
         guard let names = devicesWithUpdates, !names.isEmpty else { return nil }
         let count = names.count
@@ -252,6 +302,7 @@ final class WiFiStatus {
         mimoDescription = client.mimoDescription
         rxRate = client.rxRate
         txRate = client.txRate
+        txRetriesPct = client.wifiTxRetriesPercentage
         rxBytes = client.rxBytes
         txBytes = client.txBytes
         uptime = client.uptime
@@ -315,6 +366,7 @@ final class WiFiStatus {
             wanDrops = (health.drops ?? 0) > 0 ? health.drops : nil
             wanTxBytesRate = health.txBytesRate
             wanRxBytesRate = health.rxBytesRate
+            speedTest = health.speedTest
         } else {
             wanIsUp = nil
             wanIP = nil
@@ -324,6 +376,7 @@ final class WiFiStatus {
             wanDrops = nil
             wanTxBytesRate = nil
             wanRxBytesRate = nil
+            speedTest = nil
         }
     }
 
@@ -373,7 +426,7 @@ final class WiFiStatus {
             apDurations[name, default: 0] += duration
         }
 
-        let maxDuration = apDurations.values.max() ?? 1
+        let maxDuration = max(apDurations.values.max() ?? 1, 1)
         sessions = apDurations
             .sorted { $0.value > $1.value }
             .map { SessionEntry(
@@ -383,24 +436,89 @@ final class WiFiStatus {
             )}
     }
 
-    func markDisconnected() {
+    func updateMonitoring(
+        ddns: [DDNSStatusDTO]?,
+        portForwards: [PortForwardDTO]?,
+        rogueAPs: [RogueAPDTO]?
+    ) {
+        self.ddnsStatuses = ddns
+        self.portForwards = portForwards
+        self.nearbyAPs = rogueAPs
+    }
+
+    /// Resets all display state to defaults. Called on disconnect, error, and reset.
+    func clearState() {
         isConnected = false
         isWired = false
-        errorState = .notConnected
+        errorState = nil
         satisfaction = nil
+        wifiExperienceAverage = nil
         signal = nil
-        lastUpdated = Date()
+        noiseFloor = nil
+        apName = nil
+        essid = nil
+        channel = nil
+        channelWidth = nil
+        wifiStandard = nil
+        mimoDescription = nil
+        rxRate = nil
+        txRate = nil
+        txRetriesPct = nil
+        rxBytes = nil
+        txBytes = nil
+        ip = nil
+        uptime = nil
+        roamCount = nil
+        totalClients = nil
+        clientsOnSameAP = nil
+        apCPU = nil
+        apMemory = nil
+        recentlyRoamed = false
+        roamedFrom = nil
+        roamCyclesRemaining = 0
+        previousAPName = nil
+        previousSignal = nil
+        previousSatisfaction = nil
+        signalTrend = .stable
+        satisfactionTrend = .stable
+        sessions = nil
+        wanIsUp = nil
+        wanIP = nil
+        wanISP = nil
+        wanLatencyMs = nil
+        wanAvailability = nil
+        wanDrops = nil
+        wanTxBytesRate = nil
+        wanRxBytesRate = nil
+        gatewayCPU = nil
+        gatewayMemory = nil
+        gatewayUptime = nil
+        gatewayName = nil
+        vpnTunnels = nil
+        devicesWithUpdates = nil
+        totalDevices = nil
+        onlineDevices = nil
+        offlineDeviceNames = nil
+        speedTest = nil
+        ddnsStatuses = nil
+        portForwards = nil
+        nearbyAPs = nil
+        lastUpdated = nil
+    }
+
+    func markDisconnected() {
+        clearState()
+        errorState = .notConnected
     }
 
     func markError(_ error: ErrorState) {
-        isConnected = false
+        clearState()
         errorState = error
-        lastUpdated = Date()
     }
 
     // MARK: - Helpers
 
-    private func formatRate(_ rateKbps: Int?) -> String {
+    func formatRate(_ rateKbps: Int?) -> String {
         guard let rate = rateKbps else { return "—" }
         let mbps = Double(rate) / 1000.0
         if mbps >= 1000 {
@@ -410,22 +528,29 @@ final class WiFiStatus {
     }
 
     private func formatBytesPerSec(_ bytesPerSec: Double) -> String {
-        if bytesPerSec >= 1_073_741_824 {
-            return String(format: "%.1f GB/s", bytesPerSec / 1_073_741_824)
-        } else if bytesPerSec >= 1_048_576 {
-            return String(format: "%.1f MB/s", bytesPerSec / 1_048_576)
-        } else if bytesPerSec >= 1_024 {
-            return String(format: "%.0f KB/s", bytesPerSec / 1_024)
+        if bytesPerSec >= 1_000_000_000 {
+            return String(format: "%.1f GB/s", bytesPerSec / 1_000_000_000)
+        } else if bytesPerSec >= 1_000_000 {
+            return String(format: "%.1f MB/s", bytesPerSec / 1_000_000)
+        } else if bytesPerSec >= 1_000 {
+            return String(format: "%.0f KB/s", bytesPerSec / 1_000)
         }
         return "0 B/s"
     }
 
-    private func formatBytes(_ bytes: Int) -> String {
-        let gb = Double(bytes) / 1_073_741_824.0
+    func formatBytes(_ bytes: Int) -> String {
+        let gb = Double(bytes) / 1_000_000_000.0
         if gb >= 1.0 {
             return String(format: "%.1f GB", gb)
         }
-        let mb = Double(bytes) / 1_048_576.0
-        return String(format: "%.0f MB", mb)
+        let mb = Double(bytes) / 1_000_000.0
+        if mb >= 1.0 {
+            return String(format: "%.1f MB", mb)
+        }
+        let kb = Double(bytes) / 1_000.0
+        if kb >= 1.0 {
+            return String(format: "%.0f KB", kb)
+        }
+        return "\(bytes) B"
     }
 }

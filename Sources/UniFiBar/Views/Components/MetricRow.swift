@@ -18,6 +18,8 @@ struct MetricRow: View {
             Text(value)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
+                .lineLimit(1)
+                .truncationMode(.tail)
         }
         .font(.callout)
         .padding(.horizontal, 16)

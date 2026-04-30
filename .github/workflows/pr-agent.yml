@@ -36,7 +36,7 @@ jobs:
         uses: qodo-ai/pr-agent@d82f7d3e696cd00822694aaa3096265d3889f3f1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_KEY }}
           OPENAI_API_BASE: ${{ secrets.OPENAI_API_BASE }}
           CONFIG__MODEL: "openai/glm-5.1:cloud"
           GITHUB_ACTION_CONFIG__PR_ACTIONS: '["opened","reopened","ready_for_review","synchronize"]'

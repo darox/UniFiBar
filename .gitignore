@@ -6,6 +6,7 @@ DerivedData/
 /tmp/
 unifbar-debug.log
 .env
+.envrc
 
 # Debug scripts with credential access
 Scripts/api_debug.swift

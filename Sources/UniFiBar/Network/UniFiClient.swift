@@ -204,9 +204,8 @@ actor UniFiClient {
         if let array = try? JSONDecoder().decode([T].self, from: data) {
             return array
         }
-        // Log diagnostic info about the response
-        let preview = String(data: data.prefix(500), encoding: .utf8) ?? "(non-UTF8)"
-        Self.logger.error("Failed to decode \(endpoint): both formats failed. Response size: \(data.count) bytes, preview: \(preview)")
+        // Log diagnostic info about the response (avoid logging raw data to prevent credential/data leaks)
+        Self.logger.error("Failed to decode \(endpoint): both formats failed. Response size: \(data.count) bytes")
         return nil
     }
 
@@ -461,23 +460,28 @@ final class PinnedCertDelegate: NSObject, URLSessionDelegate, Sendable {
     }
 
     /// Checks that the leaf certificate is within its validity period (not expired, not not-yet-valid).
-    /// Returns true if the cert appears valid or if date validation cannot be performed
-    /// (e.g., self-signed certs that don't expose date OIDs via SecCertificateCopyValues).
-    /// The downstream SecTrustEvaluateWithError call still catches expired certs with proper chain evaluation.
+    /// Uses Apple's official X.509 validity OIDs via SecCertificateCopyValues.
+    /// Falls back to SecCertificateCopyNotValidAfterDate (macOS 13+) if the values dict
+    /// doesn't contain the expected keys. Returns true only if validation can't be performed.
     private static func isLeafValid(_ cert: SecCertificate) -> Bool {
-        guard let values = SecCertificateCopyValues(cert, [] as CFArray, nil) as? [String: Any] else {
-            // Can't inspect the cert — let SecTrustEvaluateWithError decide
+        let now = Date()
+        let keys: [CFString] = [kSecOIDX509V1ValidityNotBefore, kSecOIDX509V1ValidityNotAfter]
+        if let values = SecCertificateCopyValues(cert, keys as CFArray, nil) as? [CFString: Any] {
+            if let notBefore = values[kSecOIDX509V1ValidityNotBefore] as? [CFString: Any],
+               let date = notBefore[kSecPropertyKeyValue] as? Date,
+               now < date { return false }
+            if let notAfter = values[kSecOIDX509V1ValidityNotAfter] as? [CFString: Any],
+               let date = notAfter[kSecPropertyKeyValue] as? Date,
+               now > date { return false }
             return true
         }
-        let now = Date()
-        let notBeforeOID = "1.2.840.113549.1.9.5"
-        let notAfterOID = "1.2.840.113549.1.9.6"
-        if let notBefore = values[notBeforeOID] as? [String: Any],
-           let date = notBefore[kSecPropertyKeyValue as String] as? Date,
-           now < date { return false }
-        if let notAfter = values[notAfterOID] as? [String: Any],
-           let date = notAfter[kSecPropertyKeyValue as String] as? Date,
-           now > date { return false }
+
+        // Fallback: use SecCertificateCopyNotValidAfterDate (macOS 13+) for notAfter
+        if let notAfter = SecCertificateCopyNotValidAfterDate(cert) {
+            return now <= (notAfter as Date)
+        }
+
+        // Can't inspect the cert — let SecTrustEvaluateWithError decide
         return true
     }
 

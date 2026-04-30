@@ -143,7 +143,13 @@ struct VPNTunnelDTO: Decodable, Sendable, Identifiable {
     let remoteNetworkCidr: String?
     let type: String?
 
-    var id: String { _id ?? name ?? UUID().uuidString }
+    var id: String { _id ?? name ?? stableFallback }
+
+    /// Deterministic fallback so SwiftUI identity is stable across view updates.
+    private var stableFallback: String {
+        let fields = [_id, name, status, remoteNetworkCidr, type].compactMap { $0 }
+        return fields.isEmpty ? "unknown-tunnel" : fields.joined(separator: ":")
+    }
     var isConnected: Bool { status == "CONNECTED" || status == "UP" }
 
     init(_id: String? = nil, name: String? = nil, status: String? = nil, remoteNetworkCidr: String? = nil, type: String? = nil) {

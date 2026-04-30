@@ -24,5 +24,7 @@ struct MetricRow: View {
         .font(.callout)
         .padding(.horizontal, 16)
         .padding(.vertical, 1)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(label): \(value)")
     }
 }

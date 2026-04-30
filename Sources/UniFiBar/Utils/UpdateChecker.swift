@@ -7,6 +7,7 @@ final class UpdateChecker {
     var latestVersion: String?
     var releaseURL: URL?
     var releaseNotes: String?
+    private(set) var isDebugMode = false
 
     private let repoOwner = "darox"
     private let repoName = "UniFiBar"
@@ -15,12 +16,14 @@ final class UpdateChecker {
 
     /// Debug: toggle a fake update indicator for UI testing. Tap version 5 times in Preferences to trigger.
     func toggleDebugUpdate() {
-        if updateAvailable && latestVersion == "99.99.99" {
+        if isDebugMode {
             // Already in debug mode — turn it off
+            isDebugMode = false
             updateAvailable = false
             latestVersion = nil
             releaseURL = nil
         } else {
+            isDebugMode = true
             updateAvailable = true
             latestVersion = "99.99.99"
             releaseURL = URL(string: "https://github.com/darox/UniFiBar/releases")

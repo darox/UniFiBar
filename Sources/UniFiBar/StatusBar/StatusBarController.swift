@@ -37,6 +37,7 @@ final class StatusBarController {
     private var lastManualRefresh: Date = .distantPast
     private var successCount = 0
     private var isRefreshing = false
+    private var refreshGeneration = 0
 
     var consecutiveErrorCount: Int { consecutiveErrors }
     var currentPollInterval: Int { pollInterval }
@@ -94,8 +95,9 @@ final class StatusBarController {
         guard now.timeIntervalSince(lastManualRefresh) >= 5 else { return }
         lastManualRefresh = now
         authFailed = false
+        let gen = refreshGeneration
         Task {
-            await refresh()
+            await refresh(generation: gen)
         }
     }
 
@@ -124,6 +126,8 @@ final class StatusBarController {
         authFailed = false
         consecutiveErrors = 0
         successCount = 0
+        isRefreshing = false
+        refreshGeneration += 1
         hasStarted = false
         wifiStatus.clearState()
     }
@@ -205,11 +209,12 @@ final class StatusBarController {
         pathMonitor = monitor
     }
 
-    private func refresh() async {
+    private func refresh(generation: Int? = nil) async {
         // Guard against overlapping refresh calls from poll loop + wake/network events
         guard !isRefreshing else { return }
         isRefreshing = true
-        defer { isRefreshing = false }
+        let gen = generation ?? refreshGeneration
+        defer { if gen == refreshGeneration { isRefreshing = false } }
 
         guard let client else {
             wifiStatus.markError(.controllerUnreachable(reason: "Not configured"))
@@ -298,6 +303,7 @@ final class StatusBarController {
 
         consecutiveErrors = 0
         authFailed = false
+        guard gen == refreshGeneration else { return }
         wifiStatus.update(from: selfInfo)
 
         successCount += 1
@@ -328,6 +334,7 @@ final class StatusBarController {
         let tunnels = await vpnTask
         let sessions = await sessionsTask.value
 
+        guard gen == refreshGeneration else { return }
         wifiStatus.updateDevices(devices)
         wifiStatus.updateWANHealth(wanHealth)
         wifiStatus.updateVPN(tunnels)
@@ -358,10 +365,12 @@ final class StatusBarController {
         let apStats = await apStatsTask.value
         let gwStats = await gwStatsTask.value
 
+        guard gen == refreshGeneration else { return }
         wifiStatus.updateAPStats(apStats)
         wifiStatus.updateGateway(gwStats, device: gwDevice)
 
         // Parallel batch 3: monitoring data (only fetch enabled sections)
+        guard gen == refreshGeneration else { return }
         await fetchMonitoringData(client: client)
     }
 

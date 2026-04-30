@@ -14,7 +14,6 @@ struct PreferencesView: View {
     @State private var pollInterval: Int = 30
     @State private var launchAtLogin = false
     @State private var launchAtLoginInitialized = false
-    @State private var versionTapCount = 0
     @State private var isLoading = true
     @State private var isSaving = false
     @State private var showResetConfirmation = false
@@ -195,24 +194,17 @@ struct PreferencesView: View {
         isSaving = true
         defer { isSaving = false }
 
-        var urlString = controllerURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if !urlString.hasPrefix("http") {
-            urlString = "https://" + urlString
-        }
-        while urlString.hasSuffix("/") {
-            urlString.removeLast()
-        }
-
-        guard let url = URL(string: urlString),
-              let scheme = url.scheme, scheme == "https",
-              let host = url.host(), !host.isEmpty,
-              url.query == nil, url.fragment == nil
-        else {
-            errorMessage = "Invalid URL. Use HTTPS format: https://192.168.1.1"
+        let result = URLValidator.normalizeAndValidate(controllerURL)
+        guard case .success(let url) = result else {
+            if case .failure(let error) = result {
+                errorMessage = error.errorDescription
+            }
             return
         }
+
+        let urlString = url.absoluteString
 
         let testClient = UniFiClient(
             baseURL: url,
@@ -312,7 +304,7 @@ private struct DiagnosticsSection: View {
 
             LabeledContent("Debug Mode") {
                 Toggle(isOn: Binding(
-                    get: { controller.updateChecker.updateAvailable && controller.updateChecker.latestVersion == "99.99.99" },
+                    get: { controller.updateChecker.isDebugMode },
                     set: { _ in controller.updateChecker.toggleDebugUpdate() }
                 )) {
                     EmptyView()

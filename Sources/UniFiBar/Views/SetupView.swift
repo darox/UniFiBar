@@ -11,6 +11,7 @@ struct SetupView: View {
     @State private var errorMessage: String?
     @State private var failedAttempts = 0
     @State private var retryAvailableAt: Date?
+    @State private var retryTask: Task<Void, Never>?
 
     var body: some View {
         VStack(spacing: 24) {
@@ -21,6 +22,7 @@ struct SetupView: View {
         }
         .padding(24)
         .frame(width: 420, height: 480)
+        .onDisappear { retryTask?.cancel() }
     }
 
     private var header: some View {
@@ -88,29 +90,24 @@ struct SetupView: View {
         isValidating = true
         errorMessage = nil
 
-        var urlString = controllerURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if !urlString.hasPrefix("http") {
-            urlString = "https://" + urlString
+        let result = URLValidator.normalizeAndValidate(controllerURL)
+        switch result {
+        case .success(let url):
+            await connectWith(url: url, apiKey: trimmedKey)
+        case .failure(let error):
+            errorMessage = error.errorDescription
         }
-        while urlString.hasSuffix("/") {
-            urlString.removeLast()
-        }
+        isValidating = false
+    }
 
-        guard let url = URL(string: urlString),
-              let scheme = url.scheme, scheme == "https",
-              let host = url.host(), !host.isEmpty,
-              url.query == nil, url.fragment == nil
-        else {
-            errorMessage = "Invalid URL. Use HTTPS format: https://192.168.1.1"
-            isValidating = false
-            return
-        }
+    private func connectWith(url: URL, apiKey: String) async {
+        let urlString = url.absoluteString
 
         let testClient = UniFiClient(
             baseURL: url,
-            apiKey: trimmedKey,
+            apiKey: apiKey,
             allowSelfSigned: allowSelfSigned
         )
 
@@ -118,7 +115,7 @@ struct SetupView: View {
             let siteId = try await testClient.fetchSiteId()
             try await controller.preferences.save(
                 controllerURL: urlString,
-                apiKey: trimmedKey,
+                apiKey: apiKey,
                 allowSelfSigned: allowSelfSigned
             )
             controller.preferences.siteId = siteId
@@ -135,7 +132,7 @@ struct SetupView: View {
                     let delay = min(pow(2.0, Double(failedAttempts - 4)), 30.0)
                     retryAvailableAt = Date().addingTimeInterval(delay)
                     errorMessage = "Too many failed attempts. Wait \(Int(delay))s before retrying."
-                    Task {
+                    retryTask = Task {
                         try? await Task.sleep(for: .seconds(delay))
                         retryAvailableAt = nil
                     }
@@ -152,7 +149,5 @@ struct SetupView: View {
         } catch {
             errorMessage = "Connection failed. Check your URL and network settings."
         }
-
-        isValidating = false
     }
 }

@@ -53,6 +53,13 @@ struct WiFiStatusTests {
         #expect(status.statusBarColor == .red)
     }
 
+    @Test func testStatusBarColors_connectedNilSatisfaction() {
+        let status = WiFiStatus()
+        status.isConnected = true
+        status.satisfaction = nil
+        #expect(status.statusBarColor == .gray)
+    }
+
     @Test func testStatusBarColors_wired() {
         let status = WiFiStatus()
         status.isConnected = true
@@ -158,6 +165,19 @@ struct WiFiStatusTests {
         #expect(status.formatRate(nil) == "—")
     }
 
+    @Test func testFormatRate_boundary() {
+        let status = WiFiStatus()
+        // Zero
+        #expect(status.formatRate(0) == "0 Mbps")
+        // Small values — %.0f rounds 0.5 to 0, 0.999 to 1
+        #expect(status.formatRate(1) == "0 Mbps")
+        #expect(status.formatRate(999) == "1 Mbps")
+        #expect(status.formatRate(1_000) == "1 Mbps")
+        // Near Gbps boundary
+        #expect(status.formatRate(999_999) == "1000 Mbps")
+        #expect(status.formatRate(1_000_001) == "1.00 Gbps")
+    }
+
     // MARK: - Format Bytes
 
     @Test func testFormatBytes() {
@@ -166,5 +186,35 @@ struct WiFiStatusTests {
         #expect(status.formatBytes(1_500_000) == "1.5 MB")
         #expect(status.formatBytes(1_000_000_000) == "1.0 GB")
         #expect(status.formatBytes(2_000_000_000) == "2.0 GB")
+    }
+
+    @Test func testFormatBytes_boundary() {
+        let status = WiFiStatus()
+        // Zero and small
+        #expect(status.formatBytes(0) == "0 B")
+        #expect(status.formatBytes(1) == "1 B")
+        #expect(status.formatBytes(999) == "999 B")
+        // 999,999 bytes rounds up to "1.0 MB" (0.999999 MB with %.1f)
+        #expect(status.formatBytes(999_999) == "1.0 MB")
+        // Exact KB boundary
+        #expect(status.formatBytes(1_000) == "1 KB")
+        // 999,000 bytes = 999 KB
+        #expect(status.formatBytes(999_000) == "999 KB")
+    }
+
+    // MARK: - ErrorState Display
+
+    @Test func testErrorStateDisplay() {
+        #expect(WiFiStatus.ErrorState.controllerUnreachable(reason: nil).displayTitle == "Controller Unreachable")
+        #expect(WiFiStatus.ErrorState.invalidAPIKey(httpCode: 401).displayTitle == "Invalid API Key")
+        #expect(WiFiStatus.ErrorState.notConnected.displayTitle == "Not Connected")
+        #expect(WiFiStatus.ErrorState.certChanged.displayTitle == "Certificate Changed")
+
+        #expect(WiFiStatus.ErrorState.controllerUnreachable(reason: "DNS lookup failed").displayReason == "DNS lookup failed")
+        #expect(WiFiStatus.ErrorState.controllerUnreachable(reason: nil).displayReason == nil)
+        #expect(WiFiStatus.ErrorState.invalidAPIKey(httpCode: 403).displayReason == "HTTP 403")
+        #expect(WiFiStatus.ErrorState.invalidAPIKey(httpCode: nil).displayReason == nil)
+        #expect(WiFiStatus.ErrorState.notConnected.displayReason == nil)
+        #expect(WiFiStatus.ErrorState.certChanged.displayReason == nil)
     }
 }

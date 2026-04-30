@@ -49,9 +49,12 @@ struct CollapsibleSection<Content: View>: View {
                 .padding(.bottom, 4)
             }
             .buttonStyle(.plain)
+            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+            .accessibilityAddTraits(isExpanded ? .isSelected : [])
 
             if isExpanded {
                 content()
+                    .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
     }
@@ -102,7 +105,7 @@ struct CollapsibleSectionWithBadge<Content: View>: View {
                         Text("\(badge)")
                             .font(.caption2)
                             .fontWeight(.bold)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(badgeColor == Color.secondary ? Color.primary : Color.white)
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1)
                             .background(badgeColor, in: Capsule())
@@ -121,9 +124,12 @@ struct CollapsibleSectionWithBadge<Content: View>: View {
                 .padding(.bottom, 4)
             }
             .buttonStyle(.plain)
+            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+            .accessibilityAddTraits(isExpanded ? .isSelected : [])
 
             if isExpanded {
                 content()
+                    .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
     }

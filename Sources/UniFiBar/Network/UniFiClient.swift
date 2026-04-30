@@ -461,20 +461,21 @@ final class PinnedCertDelegate: NSObject, URLSessionDelegate, Sendable {
     }
 
     /// Checks that the leaf certificate is within its validity period (not expired, not not-yet-valid).
+    /// Returns true if the cert appears valid or if date validation cannot be performed
+    /// (e.g., self-signed certs that don't expose date OIDs via SecCertificateCopyValues).
+    /// The downstream SecTrustEvaluateWithError call still catches expired certs with proper chain evaluation.
     private static func isLeafValid(_ cert: SecCertificate) -> Bool {
-        // Request validity date OIDs from SecCertificateCopyValues.
-        // Passing an empty array returns all known values.
         guard let values = SecCertificateCopyValues(cert, [] as CFArray, nil) as? [String: Any] else {
-            return false
+            // Can't inspect the cert — let SecTrustEvaluateWithError decide
+            return true
         }
         let now = Date()
-        // SecCertificateCopyValues uses these OID strings as dictionary keys:
-        //   "1.2.840.113549.1.9.5" = notBefore
-        //   "1.2.840.113549.1.9.6" = notAfter
-        if let notBefore = values["1.2.840.113549.1.9.5"] as? [String: Any],
+        let notBeforeOID = "1.2.840.113549.1.9.5"
+        let notAfterOID = "1.2.840.113549.1.9.6"
+        if let notBefore = values[notBeforeOID] as? [String: Any],
            let date = notBefore[kSecPropertyKeyValue as String] as? Date,
            now < date { return false }
-        if let notAfter = values["1.2.840.113549.1.9.6"] as? [String: Any],
+        if let notAfter = values[notAfterOID] as? [String: Any],
            let date = notAfter[kSecPropertyKeyValue as String] as? Date,
            now > date { return false }
         return true

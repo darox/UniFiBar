@@ -4,6 +4,7 @@ struct MenuContentView: View {
     let controller: StatusBarController
 
     @Environment(\.openWindow) private var openWindow
+    @State private var screenUsableHeight: CGFloat = 600
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -33,13 +34,13 @@ struct MenuContentView: View {
         }
         .padding(.vertical, 8)
         .frame(height: controller.preferences.compactMode ? nil : screenUsableHeight)
+        .onAppear { updateScreenHeight() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in updateScreenHeight() }
     }
 
-    // MARK: - Computed Properties
-
-    private var screenUsableHeight: CGFloat {
-        guard let screen = NSScreen.main else { return 600 }
-        return screen.visibleFrame.height - 40
+    private func updateScreenHeight() {
+        guard let screen = NSScreen.main else { return }
+        screenUsableHeight = screen.visibleFrame.height - 40
     }
 
     private var prefs: PreferencesManager { controller.preferences }

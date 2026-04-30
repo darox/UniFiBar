@@ -70,11 +70,12 @@ struct PreferencesManagerTests {
 
     // MARK: - hasMonitoringSectionsEnabled
 
-    @Test func testHasMonitoringSectionsEnabled_withDefaults() {
+    @Test func testHasMonitoringSectionsEnabled_withDefaults() async {
         let prefs = PreferencesManager()
-        // ddns, portForwards, nearbyAPs are disabled by default, but UserDefaults may override
-        let result = prefs.hasMonitoringSectionsEnabled
-        #expect(result == true || result == false)
+        await prefs.resetAll()
+        let fresh = PreferencesManager()
+        // All monitoring sections are disabled by default after reset
+        #expect(fresh.hasMonitoringSectionsEnabled == false)
     }
 
     @Test func testHasMonitoringSectionsEnabled_allDisabled() {

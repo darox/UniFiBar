@@ -1,4 +1,5 @@
 import Foundation
+import ServiceManagement
 
 // MARK: - Section Visibility
 
@@ -82,7 +83,8 @@ final class PreferencesManager {
     init() {
         allowSelfSignedCerts = UserDefaults.standard.bool(forKey: selfSignedKey)
         compactMode = UserDefaults.standard.object(forKey: compactModeKey) as? Bool ?? false
-        pollIntervalSeconds = UserDefaults.standard.object(forKey: pollIntervalKey) as? Int ?? 30
+        let savedInterval = UserDefaults.standard.object(forKey: pollIntervalKey) as? Int ?? 30
+        pollIntervalSeconds = max(10, min(300, savedInterval))
         if let saved = UserDefaults.standard.dictionary(forKey: sectionVisibilityKey) as? [String: Bool] {
             sectionVisibility = saved
         }
@@ -162,6 +164,8 @@ final class PreferencesManager {
             // Also clean up legacy UserDefaults pin if present from older versions
             UserDefaults.standard.removeObject(forKey: "com.unifbar.cert-pin.\(host)")
         }
+        // Unregister login item so it doesn't persist after reset
+        try? await SMAppService.mainApp.unregister()
         await KeychainHelper.shared.delete(.controllerURL)
         await KeychainHelper.shared.delete(.apiKey)
         cachedURL = nil

@@ -1,13 +1,15 @@
 #!/bin/bash
+set -euo pipefail
 # UniFi API Endpoint Probe
-# Usage: bash probe_endpoints.sh <controller_url> <api_key>
-# Example: bash probe_endpoints.sh https://192.168.2.1 f81179df...
+# Usage: bash probe_endpoints.sh <controller_url>
+# The API key is read from the UNIFIBAR_API_KEY environment variable.
+# Example: UNIFIBAR_API_KEY=your_key bash probe_endpoints.sh https://192.168.2.1
 
 CONTROLLER="$1"
-API_KEY="$2"
+API_KEY="${UNIFIBAR_API_KEY:-}"
 
 if [ -z "$CONTROLLER" ] || [ -z "$API_KEY" ]; then
-    echo "Usage: bash probe_endpoints.sh <controller_url> <api_key>"
+    echo "Usage: UNIFIBAR_API_KEY=<key> bash probe_endpoints.sh <controller_url>"
     exit 1
 fi
 
@@ -15,8 +17,6 @@ fi
 CONTROLLER="${CONTROLLER%/}"
 
 HEADER="X-API-KEY: $API_KEY"
-NOW_MS=$(($(date +%s) * 1000))
-HOUR_AGO_MS=$((NOW_MS - 3600000))
 
 endpoints=(
     "GET|/proxy/network/api/s/default/rest/dynamicdns|ddns"
@@ -35,6 +35,8 @@ for entry in "${endpoints[@]}"; do
     echo "--- $label ---"
     echo "$method $path"
 
+    # Note: -sk disables TLS certificate verification for self-signed UniFi controllers.
+    # For production use, remove -k to enforce certificate validation.
     if [ "$method" = "POST" ]; then
         response=$(curl -sk -w "\n__HTTP_CODE__%{http_code}" \
             -X POST -H "$HEADER" -H "Content-Type: application/json" \

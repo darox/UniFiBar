@@ -518,6 +518,8 @@ final class WiFiStatus {
 
     // MARK: - Helpers
 
+    /// Formats a rate in Kbps to human-readable Mbps/Gbps.
+    /// Input unit: Kbps (Kilobits per second, decimal = 1000 bps).
     func formatRate(_ rateKbps: Int?) -> String {
         guard let rate = rateKbps else { return "—" }
         let mbps = Double(rate) / 1000.0
@@ -538,6 +540,8 @@ final class WiFiStatus {
         return "0 B/s"
     }
 
+    /// Formats byte counts using SI (decimal) units: KB=1000, MB=1,000,000, GB=1,000,000,000.
+    /// This matches network throughput conventions (Mbps/Gbps use decimal units).
     func formatBytes(_ bytes: Int) -> String {
         let gb = Double(bytes) / 1_000_000_000.0
         if gb >= 1.0 {
@@ -549,7 +553,12 @@ final class WiFiStatus {
         }
         let kb = Double(bytes) / 1_000.0
         if kb >= 1.0 {
-            return String(format: "%.0f KB", kb)
+            let formatted = String(format: "%.0f", kb)
+            // Avoid "1000 KB" — show as "1.0 MB" instead
+            if formatted == "1000" {
+                return String(format: "%.1f MB", mb)
+            }
+            return "\(formatted) KB"
         }
         return "\(bytes) B"
     }

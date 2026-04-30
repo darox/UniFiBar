@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:UniFiBar}",
+            "name": "Debug UniFiBar",
+            "target": "UniFiBar",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug UniFiBar"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:UniFiBar}",
+            "name": "Release UniFiBar",
+            "target": "UniFiBar",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release UniFiBar"
+        }
+    ]
+}

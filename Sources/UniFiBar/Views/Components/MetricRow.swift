@@ -18,9 +18,13 @@ struct MetricRow: View {
             Text(value)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
+                .lineLimit(1)
+                .truncationMode(.tail)
         }
         .font(.callout)
         .padding(.horizontal, 16)
         .padding(.vertical, 1)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(label): \(value)")
     }
 }

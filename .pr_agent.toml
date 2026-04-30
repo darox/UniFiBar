@@ -3,6 +3,11 @@ model = "openai/glm-5.1:cloud"
 fallback_models = []
 custom_model_max_tokens = 32768
 custom_reasoning_model = true
+ai_timeout = 3600
+
+[github_app]
+handle_push_trigger = true
+push_commands = ["/review"]
 
 [pr_reviewer]
 enable_auto_review = true

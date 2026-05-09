@@ -80,7 +80,10 @@ final class PreferencesManager {
         cachedURL.flatMap { URL(string: $0) }
     }
 
-    init() {
+    private let keychain: KeychainHelperProtocol
+
+    init(keychain: KeychainHelperProtocol = KeychainHelper.shared) {
+        self.keychain = keychain
         allowSelfSignedCerts = UserDefaults.standard.bool(forKey: selfSignedKey)
         compactMode = UserDefaults.standard.object(forKey: compactModeKey) as? Bool ?? false
         let savedInterval = UserDefaults.standard.object(forKey: pollIntervalKey) as? Int ?? 30
@@ -108,8 +111,8 @@ final class PreferencesManager {
     /// Reads Keychain once and caches. Subsequent calls use cache.
     func checkConfiguration() async {
         if cachedURL == nil || cachedAPIKey == nil {
-            cachedURL = await KeychainHelper.shared.read(.controllerURL)
-            cachedAPIKey = await KeychainHelper.shared.read(.apiKey)
+            cachedURL = await keychain.read(.controllerURL)
+            cachedAPIKey = await keychain.read(.apiKey)
         }
         isConfigured = cachedURL != nil && cachedAPIKey != nil
     }
@@ -136,8 +139,8 @@ final class PreferencesManager {
 
 
     func save(controllerURL: String, apiKey: String, allowSelfSigned: Bool) async throws {
-        try await KeychainHelper.shared.save(controllerURL, for: .controllerURL)
-        try await KeychainHelper.shared.save(apiKey, for: .apiKey)
+        try await keychain.save(controllerURL, for: .controllerURL)
+        try await keychain.save(apiKey, for: .apiKey)
         // Update cache
         cachedURL = controllerURL
         cachedAPIKey = apiKey
@@ -166,8 +169,8 @@ final class PreferencesManager {
         }
         // Unregister login item so it doesn't persist after reset
         try? await SMAppService.mainApp.unregister()
-        await KeychainHelper.shared.delete(.controllerURL)
-        await KeychainHelper.shared.delete(.apiKey)
+        await keychain.delete(.controllerURL)
+        await keychain.delete(.apiKey)
         cachedURL = nil
         cachedAPIKey = nil
         UserDefaults.standard.removeObject(forKey: siteIdKey)

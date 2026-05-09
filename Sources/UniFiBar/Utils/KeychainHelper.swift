@@ -1,10 +1,16 @@
 import Foundation
 import Security
 
+protocol KeychainHelperProtocol: Sendable {
+    func read(_ key: KeychainHelper.Key) async -> String?
+    func save(_ value: String, for key: KeychainHelper.Key) async throws
+    func delete(_ key: KeychainHelper.Key) async
+}
+
 /// Stores credentials securely in the macOS Keychain.
 /// Tries the data protection keychain first (no password prompts, requires proper signing).
 /// Falls back to the legacy keychain for ad-hoc signed development builds.
-actor KeychainHelper {
+actor KeychainHelper: KeychainHelperProtocol {
     static let shared = KeychainHelper()
 
     enum Key: String, Sendable {

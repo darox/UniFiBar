@@ -3,7 +3,25 @@ import Foundation
 import os
 @preconcurrency import Security
 
-actor UniFiClient {
+protocol UniFiClientProtocol: Sendable {
+    func fetchSiteId() async throws -> String
+    func fetchSelfV2() async throws -> SelfInfo
+    func fetchDevices(siteId: String) async throws -> [DeviceDTO]
+    func fetchVPNTunnels(siteId: String) async -> [VPNTunnelDTO]?
+    func fetchWANHealth() async -> WANHealth?
+    func fetchGatewayStats(deviceId: String, siteId: String) async -> GatewayStats?
+    func fetchAPStats(deviceId: String, siteId: String) async -> APStats?
+    func fetchSessionHistory(mac: String) async -> [SessionDTO]?
+    func fetchDDNSStatus() async -> (data: [DDNSStatusDTO]?, errorDetail: String?)
+    func fetchPortForwards() async -> (data: [PortForwardDTO]?, errorDetail: String?)
+    func fetchRogueAPs() async -> (data: [RogueAPDTO]?, errorDetail: String?)
+    var certificateChanged: Bool { get async }
+    func resetCertificatePin() async
+    func resetSiteCache() async
+    func invalidate() async
+}
+
+actor UniFiClient: UniFiClientProtocol {
     private let baseURL: URL
     private let apiKey: String
     private let session: URLSession

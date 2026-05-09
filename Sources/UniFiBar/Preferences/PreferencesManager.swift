@@ -117,8 +117,7 @@ final class PreferencesManager {
         isConfigured = cachedURL != nil && cachedAPIKey != nil
     }
 
-    func loadClient() async -> UniFiClient? {
-        // Use cached values from checkConfiguration
+    func loadClient() async -> UniFiClientProtocol? {
         if cachedURL == nil || cachedAPIKey == nil {
             await checkConfiguration()
         }

@@ -28,7 +28,13 @@ final class StatusBarController {
     private static let logger = Logger(subsystem: "com.unifbar.app", category: "StatusBarController")
 
     private var pollTask: Task<Void, Never>?
-    private var client: UniFiClient?
+    private var client: UniFiClientProtocol?
+    var testClient: UniFiClientProtocol? {
+        get { client }
+        set { client = newValue }
+    }
+
+    func refreshForTesting() async { await refresh() }
     private var pathMonitor: NWPathMonitor?
     private var wakeObserver: NSObjectProtocol?
     private var hasStarted = false
@@ -398,7 +404,7 @@ final class StatusBarController {
 
     /// Fetches optional monitoring data based on which sections are enabled in preferences.
     /// Each call is independent and fails silently — monitoring data is best-effort.
-    private func fetchMonitoringData(client: UniFiClient) async {
+    private func fetchMonitoringData(client: UniFiClientProtocol) async {
         // Evaluate section visibility on @MainActor before spawning child tasks
         let wantDDNS = preferences.isSectionEnabled(.ddns)
         let wantPF = preferences.isSectionEnabled(.portForwards)

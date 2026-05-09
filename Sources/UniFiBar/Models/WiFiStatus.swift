@@ -298,8 +298,8 @@ final class WiFiStatus {
         essid = client.essid
         channel = client.channel
         channelWidth = client.channelWidth
-        wifiStandard = client.wifiStandard
-        mimoDescription = client.mimoDescription
+        wifiStandard = Self.wifiStandard(fromRadioProto: client.radioProto)
+        mimoDescription = Self.mimoDescription(fromMimo: client.mimo)
         rxRate = client.rxRate
         txRate = client.txRate
         txRetriesPct = client.wifiTxRetriesPercentage
@@ -561,5 +561,25 @@ final class WiFiStatus {
             return "\(formatted) KB"
         }
         return "\(bytes) B"
+    }
+
+    // MARK: - DTO Display Mapping
+
+    static func wifiStandard(fromRadioProto radioProto: String?) -> String? {
+        switch radioProto {
+        case "ax": return "WiFi 6"
+        case "be": return "WiFi 7"
+        case "ac": return "WiFi 5"
+        case "n": return "WiFi 4"
+        default: return radioProto
+        }
+    }
+
+    static func mimoDescription(fromMimo mimo: String?) -> String? {
+        guard let mimo else { return nil }
+        if mimo.hasPrefix("MIMO_"), let n = Int(mimo.dropFirst(5)) {
+            return "\(n)x\(n)"
+        }
+        return mimo
     }
 }

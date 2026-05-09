@@ -24,5 +24,8 @@ jobs:
           echo "BUILD_NUMBER=$GITHUB_RUN_NUMBER" >> version.env
           cat version.env
 
+      - name: Run tests
+        run: swift test
+
       - name: Verify build
         run: swift build -c release

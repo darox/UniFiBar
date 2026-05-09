@@ -17,10 +17,13 @@ struct DeviceDTO: Decodable, Sendable {
     var isOnline: Bool { state == "CONNECTED" || state == "ONLINE" }
 
     /// Gateway models: UCG Fiber, UDM, UDM Pro, UDR, UXG, etc.
+    /// Also matches devices with gateway-like features (wan role, routing capability).
     var isGateway: Bool {
         guard let model = model?.lowercased() else { return false }
         return model.contains("ucg") || model.contains("udm") || model.contains("udr")
             || model.contains("uxg") || model.contains("gateway") || model.contains("dream")
+            || model.contains("router") || model.contains("usg")
+            || features?.contains("wan") == true
     }
 }
 
@@ -39,6 +42,7 @@ struct WANHealth: Sendable {
     let drops: Int?
     let rxBytesRate: Double?
     let txBytesRate: Double?
+    let speedTest: SpeedTestResult?
 }
 
 struct WANHealthResponse: Decodable, Sendable {
@@ -57,6 +61,13 @@ struct WANHealthResponse: Decodable, Sendable {
         let rxBytesR: Double?
         let txBytesR: Double?
 
+        // Speed test fields
+        let speedtestLastrun: Int?
+        let speedtestPing: Int?
+        let speedtestStatus: String?
+        let xputDown: Double?
+        let xputUp: Double?
+
         enum CodingKeys: String, CodingKey {
             case subsystem, status
             case ispName = "isp_name"
@@ -65,6 +76,11 @@ struct WANHealthResponse: Decodable, Sendable {
             case latency, drops
             case rxBytesR = "rx_bytes-r"
             case txBytesR = "tx_bytes-r"
+            case speedtestLastrun = "speedtest_lastrun"
+            case speedtestPing = "speedtest_ping"
+            case speedtestStatus = "speedtest_status"
+            case xputDown = "xput_down"
+            case xputUp = "xput_up"
         }
     }
 
@@ -87,6 +103,19 @@ struct WANHealthResponse: Decodable, Sendable {
         let www = data.first(where: { $0.subsystem == "www" })
         guard wan != nil || www != nil else { return nil }
 
+        let speedTest: SpeedTestResult?
+        if let lastrun = wan?.speedtestLastrun, lastrun > 0 {
+            speedTest = SpeedTestResult(
+                downloadMbps: wan?.xputDown,
+                uploadMbps: wan?.xputUp,
+                pingMs: wan?.speedtestPing,
+                lastRun: Date(timeIntervalSince1970: TimeInterval(lastrun)),
+                status: wan?.speedtestStatus
+            )
+        } else {
+            speedTest = nil
+        }
+
         return WANHealth(
             ispName: wan?.ispName,
             wanIP: wan?.wanIP,
@@ -95,7 +124,8 @@ struct WANHealthResponse: Decodable, Sendable {
             availability: wan?.uptimeStats?.WAN?.availability,
             drops: www?.drops,
             rxBytesRate: wan?.rxBytesR,
-            txBytesRate: wan?.txBytesR
+            txBytesRate: wan?.txBytesR,
+            speedTest: speedTest
         )
     }
 }
@@ -106,14 +136,36 @@ struct VPNTunnelResponse: Decodable, Sendable {
     let data: [VPNTunnelDTO]
 }
 
-struct VPNTunnelDTO: Decodable, Sendable {
-    let id: String
+struct VPNTunnelDTO: Decodable, Sendable, Identifiable {
+    private let _id: String?
     let name: String?
     let status: String?
     let remoteNetworkCidr: String?
     let type: String?
 
+    var id: String { _id ?? name ?? stableFallback }
+
+    /// Deterministic fallback so SwiftUI identity is stable across view updates.
+    private var stableFallback: String {
+        let fields = [_id, name, status, remoteNetworkCidr, type].compactMap { $0 }
+        return fields.isEmpty ? "unknown-tunnel" : fields.joined(separator: ":")
+    }
     var isConnected: Bool { status == "CONNECTED" || status == "UP" }
+
+    init(_id: String? = nil, name: String? = nil, status: String? = nil, remoteNetworkCidr: String? = nil, type: String? = nil) {
+        self._id = _id
+        self.name = name
+        self.status = status
+        self.remoteNetworkCidr = remoteNetworkCidr
+        self.type = type
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case _id
+        case name, status
+        case remoteNetworkCidr = "remote_network_cidr"
+        case type
+    }
 }
 
 // MARK: - Gateway Statistics
@@ -154,7 +206,6 @@ struct APStats: Sendable {
     let uptimeSec: Int?
     let cpuUtilizationPct: Double?
     let memoryUtilizationPct: Double?
-    let txRetriesPct: Double?
 }
 
 struct APStatsResponse: Decodable, Sendable {
@@ -166,8 +217,7 @@ struct APStatsResponse: Decodable, Sendable {
         APStats(
             uptimeSec: uptimeSec,
             cpuUtilizationPct: cpuUtilizationPct,
-            memoryUtilizationPct: memoryUtilizationPct,
-            txRetriesPct: nil
+            memoryUtilizationPct: memoryUtilizationPct
         )
     }
 }

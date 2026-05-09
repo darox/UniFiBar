@@ -14,6 +14,11 @@ let package = Package(
             resources: [
                 .copy("../../Resources/Assets.xcassets")
             ]
+        ),
+        .testTarget(
+            name: "UniFiBarTests",
+            dependencies: ["UniFiBar"],
+            path: "Tests/UniFiBarTests"
         )
     ]
 )

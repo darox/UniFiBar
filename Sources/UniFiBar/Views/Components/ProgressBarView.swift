@@ -15,5 +15,6 @@ struct ProgressBarView: View {
             }
         }
         .frame(height: 6)
+        .accessibilityValue("\(Int(min(max(fraction, 0), 1) * 100))%")
     }
 }

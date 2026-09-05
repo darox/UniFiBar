@@ -21,9 +21,13 @@ private final class SkipFirstFlag: Sendable {
 @Observable
 final class StatusBarController {
     let wifiStatus = WiFiStatus()
-    let preferences = PreferencesManager()
+    let preferences: PreferencesManager
     let diagnosticsLog = DiagnosticsLog()
     let updateChecker = UpdateChecker()
+
+    init(preferences: PreferencesManager = PreferencesManager()) {
+        self.preferences = preferences
+    }
 
     private static let logger = Logger(subsystem: "com.unifbar.app", category: "StatusBarController")
 

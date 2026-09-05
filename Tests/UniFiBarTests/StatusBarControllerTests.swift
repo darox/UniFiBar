@@ -64,8 +64,15 @@ struct StatusBarControllerTests {
         func invalidate() async {}
     }
 
-    private func makeController(fake: FakeClient) -> StatusBarController {
-        let controller = StatusBarController()
+    private func withDefaults(_ check: (UserDefaults) async -> Void) async {
+        let suite = "UniFiBarTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        await check(defaults)
+    }
+
+    private func makeController(fake: FakeClient, defaults: UserDefaults) -> StatusBarController {
+        let controller = StatusBarController(preferences: PreferencesManager(defaults: defaults))
         controller.preferences.isConfigured = true
         controller.preferences.allowSelfSignedCerts = false
         controller.testClient = fake
@@ -75,113 +82,131 @@ struct StatusBarControllerTests {
     // MARK: - Site discovery errors
 
     @Test func testSiteDiscoveryAuthFailure() async {
-        let fake = FakeClient()
-        await fake.setFetchSiteError(UniFiError.httpError(statusCode: 401))
-        let controller = makeController(fake: fake)
+        await withDefaults { defaults in
+            let fake = FakeClient()
+            await fake.setFetchSiteError(UniFiError.httpError(statusCode: 401))
+            let controller = makeController(fake: fake, defaults: defaults)
 
-        await controller.refreshForTesting()
+            await controller.refreshForTesting()
 
-        #expect(controller.wifiStatus.errorState == .invalidAPIKey(httpCode: 401))
-        #expect(controller.wifiStatus.isConnected == false)
+            #expect(controller.wifiStatus.errorState == .invalidAPIKey(httpCode: 401))
+            #expect(controller.wifiStatus.isConnected == false)
+        }
     }
 
     @Test func testSiteDiscoveryTransientError() async {
-        let fake = FakeClient()
-        await fake.setFetchSiteError(UniFiError.httpError(statusCode: 500))
-        let controller = makeController(fake: fake)
+        await withDefaults { defaults in
+            let fake = FakeClient()
+            await fake.setFetchSiteError(UniFiError.httpError(statusCode: 500))
+            let controller = makeController(fake: fake, defaults: defaults)
 
-        await controller.refreshForTesting()
+            await controller.refreshForTesting()
 
-        #expect(controller.wifiStatus.errorState == .controllerUnreachable(reason: "UniFiBar.UniFiError code=0"))
-        #expect(controller.consecutiveErrorCount == 1)
+            #expect(controller.wifiStatus.errorState == .controllerUnreachable(reason: "UniFiBar.UniFiError code=0"))
+            #expect(controller.consecutiveErrorCount == 1)
+        }
     }
 
     @Test func testSiteDiscoveryCertChanged() async {
-        let fake = FakeClient()
-        await fake.setCertChanged(true)
-        await fake.setFetchSiteError(NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled))
-        let controller = makeController(fake: fake)
+        await withDefaults { defaults in
+            let fake = FakeClient()
+            await fake.setCertChanged(true)
+            await fake.setFetchSiteError(NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled))
+            let controller = makeController(fake: fake, defaults: defaults)
 
-        await controller.refreshForTesting()
+            await controller.refreshForTesting()
 
-        #expect(controller.wifiStatus.errorState == .certChanged)
+            #expect(controller.wifiStatus.errorState == .certChanged)
+        }
     }
 
     // MARK: - Self fetch errors
 
     @Test func testSelfFetchAuthFailure() async {
-        let fake = FakeClient()
-        await fake.setFetchSelfError(UniFiError.httpError(statusCode: 403))
-        let controller = makeController(fake: fake)
+        await withDefaults { defaults in
+            let fake = FakeClient()
+            await fake.setFetchSelfError(UniFiError.httpError(statusCode: 403))
+            let controller = makeController(fake: fake, defaults: defaults)
 
-        await controller.refreshForTesting()
+            await controller.refreshForTesting()
 
-        #expect(controller.wifiStatus.errorState == .invalidAPIKey(httpCode: 403))
+            #expect(controller.wifiStatus.errorState == .invalidAPIKey(httpCode: 403))
+        }
     }
 
     @Test func testSelfFetchNotFound() async {
-        let fake = FakeClient()
-        await fake.setFetchSelfError(UniFiError.selfNotFound)
-        let controller = makeController(fake: fake)
+        await withDefaults { defaults in
+            let fake = FakeClient()
+            await fake.setFetchSelfError(UniFiError.selfNotFound)
+            let controller = makeController(fake: fake, defaults: defaults)
 
-        await controller.refreshForTesting()
+            await controller.refreshForTesting()
 
-        #expect(controller.wifiStatus.errorState == .notConnected)
+            #expect(controller.wifiStatus.errorState == .notConnected)
+        }
     }
 
     @Test func testSelfFetchCertChanged() async {
-        let fake = FakeClient()
-        await fake.setCertChanged(true)
-        await fake.setFetchSelfError(NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled))
-        let controller = makeController(fake: fake)
+        await withDefaults { defaults in
+            let fake = FakeClient()
+            await fake.setCertChanged(true)
+            await fake.setFetchSelfError(NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled))
+            let controller = makeController(fake: fake, defaults: defaults)
 
-        await controller.refreshForTesting()
+            await controller.refreshForTesting()
 
-        #expect(controller.wifiStatus.errorState == .certChanged)
+            #expect(controller.wifiStatus.errorState == .certChanged)
+        }
     }
 
     // MARK: - Successful refresh
 
     @Test func testSuccessfulRefresh() async {
-        let fake = FakeClient()
-        let controller = makeController(fake: fake)
+        await withDefaults { defaults in
+            let fake = FakeClient()
+            let controller = makeController(fake: fake, defaults: defaults)
 
-        await controller.refreshForTesting()
+            await controller.refreshForTesting()
 
-        #expect(controller.wifiStatus.isConnected == true)
-        #expect(controller.wifiStatus.isWired == false)
-        #expect(controller.wifiStatus.satisfaction == 85)
-        #expect(controller.wifiStatus.signal == -50)
-        #expect(controller.wifiStatus.apName == "U7 Pro")
-        #expect(controller.wifiStatus.essid == "HomeWiFi")
-        #expect(controller.wifiStatus.channel == 36)
-        #expect(controller.wifiStatus.ip == "192.168.1.5")
-        #expect(controller.wifiStatus.wanIsUp == true)
-        #expect(controller.wifiStatus.wanISP == "Comcast")
-        #expect(controller.wifiStatus.gatewayName == nil)
-        #expect(controller.wifiStatus.apCPU == 5.0)
-        #expect(controller.wifiStatus.errorState == nil)
-        #expect(controller.consecutiveErrorCount == 0)
+            #expect(controller.wifiStatus.isConnected == true)
+            #expect(controller.wifiStatus.isWired == false)
+            #expect(controller.wifiStatus.satisfaction == 85)
+            #expect(controller.wifiStatus.signal == -50)
+            #expect(controller.wifiStatus.apName == "U7 Pro")
+            #expect(controller.wifiStatus.essid == "HomeWiFi")
+            #expect(controller.wifiStatus.channel == 36)
+            #expect(controller.wifiStatus.ip == "192.168.1.5")
+            #expect(controller.wifiStatus.wanIsUp == true)
+            #expect(controller.wifiStatus.wanISP == "Comcast")
+            #expect(controller.wifiStatus.gatewayName == nil)
+            #expect(controller.wifiStatus.apCPU == 5.0)
+            #expect(controller.wifiStatus.errorState == nil)
+            #expect(controller.consecutiveErrorCount == 0)
+        }
     }
 
     @Test func testSuccessfulRefreshDevicesError() async {
-        let fake = FakeClient()
-        await fake.setFetchDevicesError(UniFiError.httpError(statusCode: 500))
-        let controller = makeController(fake: fake)
+        await withDefaults { defaults in
+            let fake = FakeClient()
+            await fake.setFetchDevicesError(UniFiError.httpError(statusCode: 500))
+            let controller = makeController(fake: fake, defaults: defaults)
 
-        await controller.refreshForTesting()
+            await controller.refreshForTesting()
 
-        #expect(controller.wifiStatus.isConnected == true)
-        #expect(controller.wifiStatus.satisfaction == 85)
-        #expect(controller.wifiStatus.wanIsUp == true)
-        #expect(controller.wifiStatus.totalDevices == nil)
+            #expect(controller.wifiStatus.isConnected == true)
+            #expect(controller.wifiStatus.satisfaction == 85)
+            #expect(controller.wifiStatus.wanIsUp == true)
+            #expect(controller.wifiStatus.totalDevices == nil)
+        }
     }
 
     // MARK: - Poll interval
 
     @Test func testPollIntervalNoErrors() async {
-        let controller = StatusBarController()
-        controller.preferences.setPollInterval(30)
-        #expect(controller.currentPollInterval == 30)
+        await withDefaults { defaults in
+            let controller = StatusBarController(preferences: PreferencesManager(defaults: defaults))
+            controller.preferences.setPollInterval(30)
+            #expect(controller.currentPollInterval == 30)
+        }
     }
 }

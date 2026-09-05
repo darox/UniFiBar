@@ -1,6 +1,6 @@
 # Google Mantis suitability and safe execution requirements
 
-Research for [#17](https://github.com/darox/UniFiBar/issues/17), 2026-09-05.
+Research for [Establish Google Mantis suitability and safe execution requirements](https://github.com/darox/UniFiBar/issues/17), 2026-09-05.
 Upstream pinned revision: `google/mantis@d13c93fb8e9779801711daea0d65fffa133c3b2d`.
 
 **Recommendation:** consider a narrow, human-supervised static-review pilot only

@@ -1,6 +1,6 @@
 # Isolated GPT-6 Astra route and CHF 10 cap: feasibility
 
-Research for [#23](https://github.com/darox/UniFiBar/issues/23), 2026-09-05.
+Research for [Verify isolated GPT-6 Astra routing and CHF 10 budget enforcement](https://github.com/darox/UniFiBar/issues/23), 2026-09-05.
 Binding design: [security pilot approval](https://github.com/darox/UniFiBar/issues/18#issuecomment-5551446848).
 
 **Result: not established; execution remains blocked.** Public documentation
@@ -38,6 +38,11 @@ SSH-managed remote environments; provider binaries and credentials belong on
 the environment's machine. Its Codex adapter uses the app-server integration.
 OpenAI documents `codex app-server` with default stdio transport and model
 selection/discovery through `model/list`. No model request was made. [T2][T3][T5][O7]
+
+Concrete documented entrypoints are `t3 serve` (headless T3 server) and
+`codex app-server` (provider runtime), after separately approved, version-pinned
+installation. These commands were not run; no installation or launch recipe is
+approved by this report. [T3][O7]
 
 A host-side UI is not automatically host-side tool confinement. The reviewer
 must have no host MCP/browser/computer-use bridge, host shell endpoint, shared
@@ -152,9 +157,15 @@ post-hoc dashboards, or an arbitrary safety margin do not replace CHF 10.
 4. **Money:** establish provider/admin-backed hard accounting including pending
    and ancillary charges. Verify stop/restart/failure behavior with a non-billing
    fixture where available. If CHF 10 cannot be proven, stop for a human decision.
-5. **Execution gate:** approve the source snapshot and URL/TLS/credential static
-   scope, then authorize the later pilot explicitly. Block all dynamic
-   reproduction, macOS/Keychain testing, controller contact, and automatic patches.
+5. **Source and execution gate:** preserve the already-approved seven-file
+   URL/TLS/credential allowlist at `bfb53703a970791fcb9198427312edcc86b67c09`
+   (see the binding design), not a new source selection. Before any transfer,
+   verify the export contains only those regular files; reject unexpected
+   files/symlinks and embedded secrets. Exclude `.git`, `.env`, logs, diagnostics,
+   personal settings, Keychain/controller data, and home-directory contents.
+   Record all passing preflight evidence before the later execution handoff.
+   Block dynamic reproduction, macOS/Keychain testing, controller contact, and
+   automatic patches; any scope expansion needs separate approval.
 
 **Smallest current action:** keep the pilot deferred and request the route,
 authentication, and budget evidence. No fully compliant executable configuration

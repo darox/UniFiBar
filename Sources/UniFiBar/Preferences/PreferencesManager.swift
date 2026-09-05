@@ -53,6 +53,7 @@ enum MenuSection: String, CaseIterable, Sendable {
 @MainActor
 @Observable
 final class PreferencesManager {
+    private let defaults: UserDefaults
     var isConfigured: Bool = false
     var allowSelfSignedCerts: Bool = false
     var compactMode: Bool = false
@@ -72,20 +73,21 @@ final class PreferencesManager {
     private let pollIntervalKey = "com.unifbar.pollInterval"
 
     var siteId: String? {
-        get { UserDefaults.standard.string(forKey: siteIdKey) }
-        set { UserDefaults.standard.set(newValue, forKey: siteIdKey) }
+        get { defaults.string(forKey: siteIdKey) }
+        set { defaults.set(newValue, forKey: siteIdKey) }
     }
 
     var controllerURL: URL? {
         cachedURL.flatMap { URL(string: $0) }
     }
 
-    init() {
-        allowSelfSignedCerts = UserDefaults.standard.bool(forKey: selfSignedKey)
-        compactMode = UserDefaults.standard.object(forKey: compactModeKey) as? Bool ?? false
-        let savedInterval = UserDefaults.standard.object(forKey: pollIntervalKey) as? Int ?? 30
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        allowSelfSignedCerts = defaults.bool(forKey: selfSignedKey)
+        compactMode = defaults.object(forKey: compactModeKey) as? Bool ?? false
+        let savedInterval = defaults.object(forKey: pollIntervalKey) as? Int ?? 30
         pollIntervalSeconds = max(10, min(300, savedInterval))
-        if let saved = UserDefaults.standard.dictionary(forKey: sectionVisibilityKey) as? [String: Bool] {
+        if let saved = defaults.dictionary(forKey: sectionVisibilityKey) as? [String: Bool] {
             sectionVisibility = saved
         }
     }
@@ -96,13 +98,7 @@ final class PreferencesManager {
 
     func setSectionEnabled(_ section: MenuSection, enabled: Bool) {
         sectionVisibility[section.rawValue] = enabled
-        UserDefaults.standard.set(sectionVisibility, forKey: sectionVisibilityKey)
-    }
-
-    /// Returns true if any optional monitoring section is enabled (requiring extra API calls)
-    var hasMonitoringSectionsEnabled: Bool {
-        let monitoringSections: [MenuSection] = [.ddns, .portForwards, .nearbyAPs]
-        return monitoringSections.contains { isSectionEnabled($0) }
+        defaults.set(sectionVisibility, forKey: sectionVisibilityKey)
     }
 
     /// Reads Keychain once and caches. Subsequent calls use cache.
@@ -142,19 +138,19 @@ final class PreferencesManager {
         cachedURL = controllerURL
         cachedAPIKey = apiKey
         allowSelfSignedCerts = allowSelfSigned
-        UserDefaults.standard.set(allowSelfSigned, forKey: selfSignedKey)
+        defaults.set(allowSelfSigned, forKey: selfSignedKey)
         isConfigured = true
     }
 
     func setPollInterval(_ seconds: Int) {
         let clamped = max(10, min(300, seconds))
         pollIntervalSeconds = clamped
-        UserDefaults.standard.set(clamped, forKey: pollIntervalKey)
+        defaults.set(clamped, forKey: pollIntervalKey)
     }
 
     func setCompactMode(_ value: Bool) {
         compactMode = value
-        UserDefaults.standard.set(value, forKey: compactModeKey)
+        defaults.set(value, forKey: compactModeKey)
     }
 
     func resetAll() async {
@@ -162,7 +158,7 @@ final class PreferencesManager {
         if let urlString = cachedURL, let url = URL(string: urlString), let host = url.host() {
             PinnedCertDelegate.deletePinFromKeychain(host: host)
             // Also clean up legacy UserDefaults pin if present from older versions
-            UserDefaults.standard.removeObject(forKey: "com.unifbar.cert-pin.\(host)")
+            defaults.removeObject(forKey: "com.unifbar.cert-pin.\(host)")
         }
         // Unregister login item so it doesn't persist after reset
         try? await SMAppService.mainApp.unregister()
@@ -170,11 +166,11 @@ final class PreferencesManager {
         await KeychainHelper.shared.delete(.apiKey)
         cachedURL = nil
         cachedAPIKey = nil
-        UserDefaults.standard.removeObject(forKey: siteIdKey)
-        UserDefaults.standard.removeObject(forKey: selfSignedKey)
-        UserDefaults.standard.removeObject(forKey: sectionVisibilityKey)
-        UserDefaults.standard.removeObject(forKey: compactModeKey)
-        UserDefaults.standard.removeObject(forKey: pollIntervalKey)
+        defaults.removeObject(forKey: siteIdKey)
+        defaults.removeObject(forKey: selfSignedKey)
+        defaults.removeObject(forKey: sectionVisibilityKey)
+        defaults.removeObject(forKey: compactModeKey)
+        defaults.removeObject(forKey: pollIntervalKey)
         sectionVisibility = [:]
         pollIntervalSeconds = 30
         allowSelfSignedCerts = false

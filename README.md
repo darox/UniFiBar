@@ -62,6 +62,9 @@ For development:
 Scripts/compile_and_run.sh
 ```
 
+For test commands, worktree setup, and macOS QA, read
+[Development checks](docs/development.md).
+
 ## Setup
 
 1. Open UniFiBar from the menu bar

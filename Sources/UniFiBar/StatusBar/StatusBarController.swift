@@ -23,24 +23,37 @@ final class StatusBarController {
     let wifiStatus = WiFiStatus()
     let preferences: PreferencesManager
     let diagnosticsLog = DiagnosticsLog()
-    let updateChecker = UpdateChecker()
+    let updateChecker: UpdateChecker
+    private let loadClient: @MainActor () async -> UniFiClientProtocol?
+    private let observesSystemEvents: Bool
 
     init(preferences: PreferencesManager = PreferencesManager()) {
         self.preferences = preferences
+        loadClient = { await preferences.loadClient() }
+        updateChecker = UpdateChecker()
+        observesSystemEvents = true
+    }
+
+    /// Unit fixtures must supply isolated defaults, a fake Keychain, and only fake clients.
+    /// A nil loader result stays unconfigured; it never falls back to native services.
+    init(
+        fixturePreferences: PreferencesManager,
+        clientLoader: @escaping @MainActor () async -> UniFiClientProtocol?
+    ) {
+        preferences = fixturePreferences
+        loadClient = clientLoader
+        updateChecker = UpdateChecker(checksEnabled: false)
+        observesSystemEvents = false
     }
 
     private static let logger = Logger(subsystem: "com.unifbar.app", category: "StatusBarController")
 
-    private var pollTask: Task<Void, Never>?
+    private(set) var pollTask: Task<Void, Never>?
     private var client: UniFiClientProtocol?
-    var testClient: UniFiClientProtocol? {
-        get { client }
-        set { client = newValue }
-    }
 
-    func refreshForTesting() async { await refresh() }
     private var pathMonitor: NWPathMonitor?
     private var wakeObserver: NSObjectProtocol?
+    var hasSystemObservers: Bool { pathMonitor != nil || wakeObserver != nil }
     private var hasStarted = false
     private var consecutiveErrors = 0
     private var authFailed = false
@@ -73,9 +86,9 @@ final class StatusBarController {
         let macOS = ProcessInfo.processInfo.operatingSystemVersionString
         diagnosticsLog.record(.system, level: .info, message: "UniFiBar started", detail: "v\(version) macOS \(macOS)")
 
-        await preferences.checkConfiguration()
-        guard preferences.isConfigured else { return }
-        client = await preferences.loadClient()
+        client = await loadClient()
+        preferences.isConfigured = client != nil
+        guard client != nil else { return }
         startPolling()
         observeSystemEvents()
     }
@@ -89,7 +102,8 @@ final class StatusBarController {
         if let oldClient = client {
             await oldClient.invalidate()
         }
-        client = await preferences.loadClient()
+        client = await loadClient()
+        preferences.isConfigured = client != nil
         if client != nil {
             await refresh()
             startPolling()
@@ -181,6 +195,7 @@ final class StatusBarController {
     }
 
     private func observeSystemEvents() {
+        guard observesSystemEvents else { return }
         // Wake from sleep — wait for network, then refresh with reset backoff
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,

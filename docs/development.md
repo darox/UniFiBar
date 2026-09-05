@@ -37,10 +37,32 @@ It does not launch the app or test the display. It returns status 2 on Linux;
 a portable pass is not a full pass. Swift compilation is the current Swift
 check; this repository has no separate Swift lint configuration.
 
-Preference and controller tests use a separate UserDefaults suite for each case.
-Credential tests inject a fake Keychain. The `resetAll()` test is disabled because
-it still unregisters the real login item; reset and certificate-pin cleanup
+Preference and controller tests use a separate UserDefaults suite for each case
+and always inject `FakeKeychain`, including non-credential tests. The `resetAll()`
+test is disabled because it still unregisters the real login item; reset and certificate-pin cleanup
 remain separate-account QA. Never run credential tests against the real Keychain.
+
+### Controller fixture isolation (#25)
+
+Use `StatusBarController(fixturePreferences:clientLoader:)` with an isolated
+preferences suite, a fake Keychain, and a loader returning only fake clients.
+Startup and reconfiguration reuse that loader; `nil` stays unconfigured without
+loading credentials. Fixtures use the production polling loop but register no
+wake/network observers. Their updater creates no manual or periodic check tasks
+and does not access the host's update timestamp. Stop and await polling tasks
+before removing a test's defaults suite.
+
+```bash
+swift test --filter 'StatusBarControllerTests|PreferencesManagerTests|UpdateCheckerTests'
+```
+
+This is a unit-test seam, not a sandbox or a launchable fixture app. Callers must
+provide safe dependencies; ordinary construction still uses native services.
+The client-construction test uses normal TLS without requests or pin access;
+it does not cover self-signed certificate handling. Setup/Preferences UI can
+still create real clients and perform login-item/reset/pin actions. Do not launch
+the app for fixture checks. Native lab readiness, profiling, controller replay,
+and the deferred Mantis review remain separate work under roadmap #16.
 
 `Tests/test_build_bundle.py` uses the actual bundle assembly function and
 tracked image assets in a temporary directory. `true` from `PATH` supplies an

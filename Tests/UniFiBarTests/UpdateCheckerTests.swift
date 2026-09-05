@@ -4,6 +4,14 @@ import Testing
 @MainActor
 struct UpdateCheckerTests {
 
+    @Test func testDisabledChecksDoNotCreateTasks() {
+        let checker = UpdateChecker(checksEnabled: false)
+        #expect(checker.checkNow() == nil)
+        #expect(checker.schedulePeriodicCheck() == nil)
+        #expect(!checker.updateAvailable)
+        #expect(checker.latestVersion == nil)
+    }
+
     // MARK: - Version Comparison
 
     @Test func testIsNewer_major() {

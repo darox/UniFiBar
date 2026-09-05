@@ -5,28 +5,6 @@ import Testing
 @MainActor
 struct PreferencesManagerTests {
 
-    private final actor FakeKeychain: KeychainHelperProtocol {
-        private var storage: [String: String] = [:]
-        var saveError: KeychainError? = nil
-
-        func setSaveError(_ error: KeychainError?) {
-            saveError = error
-        }
-
-        func read(_ key: KeychainHelper.Key) -> String? {
-            storage[key.rawValue]
-        }
-
-        func save(_ value: String, for key: KeychainHelper.Key) throws {
-            if let error = saveError { throw error }
-            storage[key.rawValue] = value
-        }
-
-        func delete(_ key: KeychainHelper.Key) {
-            storage[key.rawValue] = nil
-        }
-    }
-
     private func makePrefs(defaults: UserDefaults) -> (PreferencesManager, FakeKeychain) {
         let keychain = FakeKeychain()
         let prefs = PreferencesManager(defaults: defaults, keychain: keychain)
@@ -42,7 +20,7 @@ struct PreferencesManagerTests {
 
     @Test func testSectionVisibility() async {
         await withDefaults { defaults in
-            let prefs = PreferencesManager(defaults: defaults)
+            let prefs = PreferencesManager(defaults: defaults, keychain: FakeKeychain())
             for section in [MenuSection.internet, .vpn, .wifi, .network, .sessionHistory] {
                 #expect(prefs.isSectionEnabled(section))
             }
@@ -51,21 +29,21 @@ struct PreferencesManagerTests {
             }
             prefs.setSectionEnabled(.ddns, enabled: true)
             #expect(prefs.isSectionEnabled(.ddns))
-            #expect(PreferencesManager(defaults: defaults).isSectionEnabled(.ddns))
+            #expect(PreferencesManager(defaults: defaults, keychain: FakeKeychain()).isSectionEnabled(.ddns))
             prefs.setSectionEnabled(.ddns, enabled: false)
             #expect(!prefs.isSectionEnabled(.ddns))
-            #expect(!PreferencesManager(defaults: defaults).isSectionEnabled(.ddns))
+            #expect(!PreferencesManager(defaults: defaults, keychain: FakeKeychain()).isSectionEnabled(.ddns))
         }
     }
 
     @Test(arguments: [(5, 10), (500, 300), (30, 30), (10, 10), (300, 300)])
     func testPollIntervalClamping(input: Int, expected: Int) async {
         await withDefaults { defaults in
-            let prefs = PreferencesManager(defaults: defaults)
+            let prefs = PreferencesManager(defaults: defaults, keychain: FakeKeychain())
             #expect(prefs.pollIntervalSeconds == 30)
             prefs.setPollInterval(input)
             #expect(prefs.pollIntervalSeconds == expected)
-            #expect(PreferencesManager(defaults: defaults).pollIntervalSeconds == expected)
+            #expect(PreferencesManager(defaults: defaults, keychain: FakeKeychain()).pollIntervalSeconds == expected)
         }
     }
 
@@ -157,15 +135,17 @@ struct PreferencesManagerTests {
 
     // MARK: - loadClient
 
-    @Test func testLoadClientWithCredentials() async throws {
+    @Test func testLoadClientWithCredentialsWithoutPinning() async throws {
         try await withDefaults { defaults in
             let (prefs, keychain) = makePrefs(defaults: defaults)
             try await keychain.save("https://192.168.1.1", for: .controllerURL)
             try await keychain.save("api-key-123", for: .apiKey)
-            prefs.allowSelfSignedCerts = true
+            // Pinned construction reads the native pin store; separate-account QA only.
+            prefs.allowSelfSignedCerts = false
 
             let client = await prefs.loadClient()
             #expect(client != nil)
+            await client?.invalidate()
         }
     }
 

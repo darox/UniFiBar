@@ -13,6 +13,11 @@ final class UpdateChecker {
     private let repoName = "UniFiBar"
     private let checkInterval: TimeInterval = 86_400 // 24 hours
     private let lastCheckKey = "com.unifbar.lastUpdateCheck"
+    private let checksEnabled: Bool
+
+    init(checksEnabled: Bool = true) {
+        self.checksEnabled = checksEnabled
+    }
 
     /// Debug: toggle a fake update indicator for UI testing. Tap version 5 times in Preferences to trigger.
     func toggleDebugUpdate() {
@@ -34,18 +39,23 @@ final class UpdateChecker {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
     }
 
-    func checkNow() {
-        Task {
+    @discardableResult
+    func checkNow() -> Task<Void, Never>? {
+        guard checksEnabled else { return nil }
+        return Task {
             await performCheck()
         }
     }
 
-    func schedulePeriodicCheck() {
+    @discardableResult
+    func schedulePeriodicCheck() -> Task<Void, Never>? {
+        // Fixture mode must not even read the host's update-check timestamp.
+        guard checksEnabled else { return nil }
         let lastCheck = UserDefaults.standard.object(forKey: lastCheckKey) as? Date
         if let lastCheck, Date().timeIntervalSince(lastCheck) < checkInterval {
-            return
+            return nil
         }
-        checkNow()
+        return checkNow()
     }
 
     private func performCheck() async {

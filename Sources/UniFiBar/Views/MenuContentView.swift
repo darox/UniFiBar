@@ -2,6 +2,9 @@ import SwiftUI
 
 struct MenuContentView: View {
     let controller: StatusBarController
+    var copyReport: @MainActor (String) -> Void = DiagnosticsLog.copyToClipboard
+    /// Offscreen fixtures can supply a screen budget without changing the host display.
+    var availableHeight: CGFloat? = nil
 
     @Environment(\.openWindow) private var openWindow
     @State private var screenUsableHeight: CGFloat = 600
@@ -33,7 +36,10 @@ struct MenuContentView: View {
             MenuFooterView(controller: controller, onRefresh: { controller.refreshNow() }, onPreferences: { activateAndOpenWindow("preferences") })
         }
         .padding(.vertical, 8)
-        .frame(height: controller.preferences.compactMode ? nil : screenUsableHeight)
+        .frame(
+            minHeight: controller.preferences.compactMode || !status.isConnected ? nil : menuHeight,
+            maxHeight: status.isConnected ? menuHeight : nil
+        )
         .onAppear { updateScreenHeight() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in updateScreenHeight() }
     }
@@ -45,6 +51,7 @@ struct MenuContentView: View {
 
     private var prefs: PreferencesManager { controller.preferences }
     private var status: WiFiStatus { controller.wifiStatus }
+    private var menuHeight: CGFloat { availableHeight ?? screenUsableHeight }
 
     // MARK: - Connected View
 
@@ -57,6 +64,7 @@ struct MenuContentView: View {
                 footerTimestamp
             }
         }
+        .scrollBounceBehavior(.basedOnSize)
     }
 
     // MARK: - Core Sections
@@ -179,8 +187,17 @@ struct MenuContentView: View {
     @ViewBuilder
     private var footerTimestamp: some View {
         VStack(alignment: .leading, spacing: 2) {
+            ForEach(WiFiStatus.DataSource.allCases, id: \.self) { source in
+                if prefs.isSectionEnabled(source.menuSection),
+                   let availability = status.dataAvailability[source],
+                   availability != .available, availability != .notApplicable, availability != .disabled {
+                    Text("\(source.rawValue): \(availability.rawValue)")
+                        .font(.caption)
+                        .foregroundStyle(availability == .unavailable ? Color.orange : Color.secondary)
+                }
+            }
             if let lastUpdated = status.lastUpdated {
-                Text("Last updated: \(lastUpdated.formatted(date: .omitted, time: .standard))")
+                Text("Connection updated: \(lastUpdated.formatted(date: .omitted, time: .standard))")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -217,8 +234,7 @@ struct MenuContentView: View {
             allowSelfSignedCerts: controller.preferences.allowSelfSignedCerts,
             wifiStatus: controller.wifiStatus
         )
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(report, forType: .string)
+        copyReport(report)
     }
 }
 
@@ -293,7 +309,7 @@ private struct MenuErrorView: View {
             case .notConnected:
                 Label("Not Connected", systemImage: "wifi.slash")
                     .foregroundStyle(.secondary)
-                Text("This Mac is not connected to a UniFi network.")
+                Text("This Mac was not found in the selected site's client list.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

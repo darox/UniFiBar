@@ -21,7 +21,7 @@ enum URLValidator {
 
     static func normalizeAndValidate(_ raw: String) -> Result<URL, ValidationError> {
         var urlString = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !urlString.hasPrefix("http") {
+        if !urlString.contains("://") {
             urlString = "https://" + urlString
         }
         while urlString.hasSuffix("/") {
@@ -30,11 +30,14 @@ enum URLValidator {
         guard let url = URL(string: urlString) else {
             return .failure(.invalidFormat)
         }
-        guard let scheme = url.scheme, scheme == "https" else {
+        guard url.scheme?.lowercased() == "https" else {
             return .failure(.mustBeHTTPS)
         }
         guard let host = url.host(), !host.isEmpty else {
             return .failure(.emptyHost)
+        }
+        if let port = url.port, !(1...65535).contains(port) {
+            return .failure(.invalidFormat)
         }
         guard url.query == nil, url.fragment == nil else {
             return .failure(.noQueryOrFragment)

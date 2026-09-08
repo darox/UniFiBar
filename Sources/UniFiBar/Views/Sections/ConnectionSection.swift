@@ -72,8 +72,8 @@ struct AccessPointSection: View {
     }
 
     private func channelDescription(_ channel: Int) -> String {
-        let band = channel > 14 ? "5 GHz" : "2.4 GHz"
-        let base = "\(channel) · \(band)"
+        // Channel numbers overlap across bands, including 6 GHz.
+        let base = "\(channel)"
         if let width = formattedChannelWidth {
             return "\(base) · \(width)"
         }

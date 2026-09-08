@@ -38,11 +38,12 @@ final class StatusBarController {
     /// A nil loader result stays unconfigured; it never falls back to native services.
     init(
         fixturePreferences: PreferencesManager,
+        updateChecker: UpdateChecker? = nil,
         clientLoader: @escaping @MainActor () async -> UniFiClientProtocol?
     ) {
         preferences = fixturePreferences
         loadClient = clientLoader
-        updateChecker = UpdateChecker(checksEnabled: false)
+        self.updateChecker = updateChecker ?? UpdateChecker(checksEnabled: false)
         observesSystemEvents = false
     }
 
@@ -61,6 +62,8 @@ final class StatusBarController {
     private var successCount = 0
     private var isRefreshing = false
     private var refreshGeneration = 0
+    private var connectionGeneration = 0
+    private var validationClients: [Int: UniFiClientProtocol] = [:]
 
     var consecutiveErrorCount: Int { consecutiveErrors }
     var currentPollInterval: Int { pollInterval }
@@ -79,14 +82,20 @@ final class StatusBarController {
     }
 
     func start() async {
-        guard !hasStarted else { return }
+        guard !hasStarted, preferences.automaticConnectionAllowed else { return }
         hasStarted = true
 
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
         let macOS = ProcessInfo.processInfo.operatingSystemVersionString
         diagnosticsLog.record(.system, level: .info, message: "UniFiBar started", detail: "v\(version) macOS \(macOS)")
 
-        client = await loadClient()
+        let gen = refreshGeneration
+        let loadedClient = await loadClient()
+        guard gen == refreshGeneration else {
+            await loadedClient?.invalidate()
+            return
+        }
+        client = loadedClient
         preferences.isConfigured = client != nil
         guard client != nil else { return }
         startPolling()
@@ -94,46 +103,104 @@ final class StatusBarController {
     }
 
     func reconfigure() async {
+        guard preferences.automaticConnectionAllowed else { return }
         stopPolling()
+        refreshGeneration += 1
+        let gen = refreshGeneration
+        isRefreshing = false
+        successCount = 0
+        wifiStatus.clearState()
         // Reset error state so new credentials get a clean start
         authFailed = false
         consecutiveErrors = 0
         // Invalidate old URLSession to release delegate and cancel in-flight requests
-        if let oldClient = client {
-            await oldClient.invalidate()
+        let oldClient = client
+        client = nil
+        await oldClient?.invalidate()
+        guard gen == refreshGeneration else { return }
+        let loadedClient = await loadClient()
+        guard gen == refreshGeneration else {
+            await loadedClient?.invalidate()
+            return
         }
-        client = await loadClient()
+        client = loadedClient
         preferences.isConfigured = client != nil
         if client != nil {
-            await refresh()
+            await refresh(generation: gen)
+            guard gen == refreshGeneration else { return }
             startPolling()
-            if !hasStarted {
-                observeSystemEvents()
-            }
+            observeSystemEvents()
         }
         hasStarted = true
     }
 
-    func refreshNow() {
+    /// Shared setup/preferences flow. Callers supply the temporary validation client.
+    func connect(using testClient: UniFiClientProtocol, url: URL, apiKey: String, allowSelfSigned: Bool) async throws {
+        guard !preferences.isResetting else {
+            await testClient.invalidate()
+            throw CancellationError()
+        }
+        connectionGeneration += 1
+        let generation = connectionGeneration
+        validationClients[generation] = testClient
+        let validation: Result<String, Error>
+        do {
+            try Task.checkCancellation()
+            validation = .success(try await testClient.fetchSiteId())
+        } catch {
+            validation = .failure(error)
+        }
+        await testClient.invalidate()
+        validationClients[generation] = nil
+        try Task.checkCancellation()
+        guard generation == connectionGeneration else { throw CancellationError() }
+        let siteId = try validation.get()
+        // Once persistence starts, cancellation is not a rollback of already-written credentials.
+        try await preferences.save(controllerURL: url.absoluteString, apiKey: apiKey, allowSelfSigned: allowSelfSigned,
+                                   isCurrent: { generation == self.connectionGeneration })
+        try Task.checkCancellation()
+        guard generation == connectionGeneration else { throw CancellationError() }
+        preferences.siteId = siteId
+        await reconfigure()
+    }
+
+    @discardableResult
+    func refreshNow() -> Task<Void, Never>? {
+        guard preferences.automaticConnectionAllowed else { return nil }
         let now = Date()
-        guard now.timeIntervalSince(lastManualRefresh) >= 5 else { return }
+        guard now.timeIntervalSince(lastManualRefresh) >= 5 else { return nil }
         lastManualRefresh = now
         authFailed = false
         let gen = refreshGeneration
-        Task {
+        return Task {
             await refresh(generation: gen)
         }
     }
 
     func resetCertPin() async {
-        guard let client else { return }
-        await client.resetCertificatePin()
+        guard preferences.automaticConnectionAllowed, let client else { return }
+        let generation = refreshGeneration
+        do {
+            try await client.resetCertificatePin()
+        } catch {
+            diagnosticsLog.record(.certificate, level: .error, message: "Could not reset certificate pin; existing trust preserved")
+            return
+        }
+        guard generation == refreshGeneration, preferences.automaticConnectionAllowed else { return }
         // Reconfigure to get a fresh URLSession with a fresh delegate
         await reconfigure()
     }
 
-    /// Resets all controller and WiFi state (called after preferences resetAll).
-    func resetState() {
+    /// Used by both reset UI and fixtures; admission closes before returning the cleanup task.
+    func resetConfiguration() -> Task<Void, Error> {
+        if preferences.isResetting { return preferences.resetAll() }
+        let invalidation = resetState()
+        return preferences.resetAll(after: invalidation)
+    }
+
+    @discardableResult
+    func resetState() -> Task<Void, Never>? {
+        connectionGeneration += 1
         stopPolling()
         if let observer = wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
@@ -142,11 +209,10 @@ final class StatusBarController {
         pathMonitor?.cancel()
         pathMonitor = nil
         // Invalidate URLSession to release delegate and cancel in-flight requests
-        let oldClient = client
+        var oldClients = Array(validationClients.values)
+        validationClients.removeAll()
+        if let client { oldClients.append(client) }
         client = nil
-        if let oldClient {
-            Task { await oldClient.invalidate() }
-        }
         authFailed = false
         consecutiveErrors = 0
         successCount = 0
@@ -154,14 +220,19 @@ final class StatusBarController {
         refreshGeneration += 1
         hasStarted = false
         wifiStatus.clearState()
+        guard !oldClients.isEmpty else { return nil }
+        return Task { for oldClient in oldClients { await oldClient.invalidate() } }
     }
 
     private func startPolling() {
+        guard preferences.automaticConnectionAllowed, client != nil else { return }
         pollTask?.cancel()
+        let gen = refreshGeneration
         pollTask = Task { [weak self] in
             guard let self else { return }
-            while !Task.isCancelled {
-                await self.refresh()
+            while !Task.isCancelled && gen == self.refreshGeneration {
+                await self.refresh(generation: gen)
+                guard !Task.isCancelled, gen == self.refreshGeneration else { return }
                 // Stop polling if auth has permanently failed — user must fix credentials
                 if self.authFailed {
                     // Clear the stale reference so wake/network handlers can restart polling
@@ -195,7 +266,7 @@ final class StatusBarController {
     }
 
     private func observeSystemEvents() {
-        guard observesSystemEvents else { return }
+        guard preferences.automaticConnectionAllowed, observesSystemEvents, !hasSystemObservers else { return }
         // Wake from sleep — wait for network, then refresh with reset backoff
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
@@ -204,10 +275,13 @@ final class StatusBarController {
         ) { [weak self] _ in
             guard let self else { return }
             Task { @MainActor in
+                let gen = self.refreshGeneration
                 self.consecutiveErrors = 0
                 // Wait longer for Wi-Fi to reassociate after wake
                 try? await Task.sleep(for: .seconds(8))
-                await self.refresh()
+                guard gen == self.refreshGeneration else { return }
+                await self.refresh(generation: gen)
+                guard gen == self.refreshGeneration else { return }
                 // If still failing, restart normal polling
                 if !self.authFailed && self.pollTask == nil {
                     self.startPolling()
@@ -222,8 +296,10 @@ final class StatusBarController {
             guard skipFirst.check() else { return }
             guard let self, path.status == .satisfied else { return }
             Task { @MainActor in
+                let gen = self.refreshGeneration
                 self.consecutiveErrors = 0
-                await self.refresh()
+                await self.refresh(generation: gen)
+                guard gen == self.refreshGeneration else { return }
                 // If polling had stopped (auth failure), don't restart
                 if !self.authFailed && self.pollTask == nil {
                     self.startPolling()
@@ -234,12 +310,14 @@ final class StatusBarController {
         pathMonitor = monitor
     }
 
-    private func refresh(generation: Int? = nil) async {
+    private func refresh(generation: Int) async {
         // Guard against overlapping refresh calls from poll loop + wake/network events
-        guard !isRefreshing else { return }
+        let gen = generation
+        guard preferences.automaticConnectionAllowed, gen == refreshGeneration, !isRefreshing else { return }
         isRefreshing = true
-        let gen = generation ?? refreshGeneration
         defer { if gen == refreshGeneration { isRefreshing = false } }
+
+        updateChecker.schedulePeriodicCheck()
 
         guard let client else {
             wifiStatus.markError(.controllerUnreachable(reason: "Not configured"))
@@ -250,10 +328,12 @@ final class StatusBarController {
         let siteId: String
         do {
             siteId = try await client.fetchSiteId()
+            guard gen == refreshGeneration else { return }
             if preferences.siteId != siteId {
                 preferences.siteId = siteId
             }
         } catch let error as UniFiError {
+            guard gen == refreshGeneration else { return }
             switch error {
             case .httpError(let code) where code == 401 || code == 403:
                 Self.logger.error("Auth failed during site discovery (HTTP \(code))")
@@ -271,7 +351,9 @@ final class StatusBarController {
             await client.resetSiteCache()
             return
         } catch {
-            if await client.certificateChanged {
+            let certChanged = await client.certificateChanged
+            guard gen == refreshGeneration else { return }
+            if certChanged {
                 Self.logger.warning("Certificate pin mismatch detected — cert may have been renewed")
                 diagnosticsLog.record(.certificate, level: .warning, message: "Certificate pin mismatch detected")
                 wifiStatus.markError(.certChanged)
@@ -292,6 +374,7 @@ final class StatusBarController {
         do {
             selfInfo = try await client.fetchSelfV2()
         } catch let error as UniFiError {
+            guard gen == refreshGeneration else { return }
             switch error {
             case .httpError(let code) where code == 401 || code == 403:
                 Self.logger.error("Authentication failed (HTTP \(code))")
@@ -312,7 +395,9 @@ final class StatusBarController {
             }
             return
         } catch {
-            if await client.certificateChanged {
+            let certChanged = await client.certificateChanged
+            guard gen == refreshGeneration else { return }
+            if certChanged {
                 Self.logger.warning("Certificate pin mismatch detected — cert may have been renewed")
                 diagnosticsLog.record(.certificate, level: .warning, message: "Certificate pin mismatch detected")
                 wifiStatus.markError(.certChanged)
@@ -326,18 +411,15 @@ final class StatusBarController {
             return
         }
 
+        guard gen == refreshGeneration else { return }
         consecutiveErrors = 0
         authFailed = false
-        guard gen == refreshGeneration else { return }
         wifiStatus.update(from: selfInfo)
+        wifiStatus.beginSupplementalRefresh()
 
         successCount += 1
         if successCount % 10 == 0 {
             diagnosticsLog.record(.connection, level: .info, message: "Poll succeeded", detail: "\(successCount) consecutive")
-        }
-
-        if successCount == 1 {
-            updateChecker.schedulePeriodicCheck()
         }
 
         let me = selfInfo.client
@@ -346,61 +428,58 @@ final class StatusBarController {
         async let devicesTask = client.fetchDevices(siteId: siteId)
         async let wanHealthTask = client.fetchWANHealth()
         async let vpnTask = client.fetchVPNTunnels(siteId: siteId)
-        let myMac = me.mac
-        let sessionsTask: Task<[SessionDTO]?, Never>
-        if let mac = myMac {
-            sessionsTask = Task { await client.fetchSessionHistory(mac: mac) }
-        } else {
-            sessionsTask = Task { nil }
-        }
+        async let sessionsTask: [SessionDTO]? = {
+            guard let mac = me.mac else { return nil }
+            return await client.fetchSessionHistory(mac: mac)
+        }()
 
-        let devices = (try? await devicesTask) ?? []
+        let devices = try? await devicesTask
         let wanHealth = await wanHealthTask
         let tunnels = await vpnTask
-        let sessions = await sessionsTask.value
+        let sessions = await sessionsTask
 
-        guard gen == refreshGeneration else { return }
+        guard gen == refreshGeneration, !Task.isCancelled else { return }
         wifiStatus.updateDevices(devices)
         wifiStatus.updateWANHealth(wanHealth)
         wifiStatus.updateVPN(tunnels)
-        wifiStatus.updateSessions(sessions, devices: devices)
+        wifiStatus.updateSessions(sessions, devices: devices ?? [])
+        if me.mac == nil || selfInfo.isWired { wifiStatus.dataAvailability[.sessions] = .notApplicable }
 
         // Parallel batch 2: AP stats + gateway stats (depend on devices result)
         let apDevice = me.apMac.flatMap { apMac in
-            devices.first(where: { $0.mac?.lowercased() == apMac.lowercased() })
+            devices?.first(where: { $0.mac?.lowercased() == apMac.lowercased() })
         }
-        let gwDevice = devices.first(where: \.isGateway)
-            ?? devices.first(where: { $0.mac?.lowercased() == me.gwMac?.lowercased() })
+        let gwDevice = devices?.first(where: \.isGateway)
+            ?? devices?.first(where: { me.gwMac != nil && $0.mac?.lowercased() == me.gwMac?.lowercased() })
 
         let apId = apDevice?.id
         let gwId = gwDevice?.id
-        let apStatsTask: Task<APStats?, Never>
-        let gwStatsTask: Task<GatewayStats?, Never>
-        if let apId {
-            apStatsTask = Task { await client.fetchAPStats(deviceId: apId, siteId: siteId) }
-        } else {
-            apStatsTask = Task { nil }
-        }
-        if let gwId {
-            gwStatsTask = Task { await client.fetchGatewayStats(deviceId: gwId, siteId: siteId) }
-        } else {
-            gwStatsTask = Task { nil }
-        }
+        async let apStatsTask: APStats? = {
+            guard let apId else { return nil }
+            return await client.fetchAPStats(deviceId: apId, siteId: siteId)
+        }()
+        async let gwStatsTask: GatewayStats? = {
+            guard let gwId else { return nil }
+            return await client.fetchGatewayStats(deviceId: gwId, siteId: siteId)
+        }()
 
-        let apStats = await apStatsTask.value
-        let gwStats = await gwStatsTask.value
+        let apStats = await apStatsTask
+        let gwStats = await gwStatsTask
 
-        guard gen == refreshGeneration else { return }
+        guard gen == refreshGeneration, !Task.isCancelled else { return }
         wifiStatus.updateAPStats(apStats)
         wifiStatus.updateGateway(gwStats, device: gwDevice)
+        if selfInfo.isWired { wifiStatus.dataAvailability[.accessPoint] = .notApplicable }
+        if devices != nil, gwDevice == nil { wifiStatus.dataAvailability[.gateway] = .notApplicable }
 
         // Parallel batch 3: monitoring data (only fetch enabled sections)
-        guard gen == refreshGeneration else { return }
-        await fetchMonitoringData(client: client)
+        await fetchMonitoringData(client: client, generation: gen)
     }
 
     /// Maps network errors to human-readable reasons for the UI.
     private static func reasonFromError(_ error: Error) -> String? {
+        if let error = error as? CertificateConnectionError { return error.errorDescription }
+        if let error = error as? UniFiError { return error.errorDescription }
         let nsError = error as NSError
         guard nsError.domain == NSURLErrorDomain else {
             return "\(nsError.domain) code=\(nsError.code)"
@@ -422,8 +501,8 @@ final class StatusBarController {
     }
 
     /// Fetches optional monitoring data based on which sections are enabled in preferences.
-    /// Each call is independent and fails silently — monitoring data is best-effort.
-    private func fetchMonitoringData(client: UniFiClientProtocol) async {
+    /// Each call is independent; unavailable data is shown separately from empty responses.
+    private func fetchMonitoringData(client: UniFiClientProtocol, generation: Int) async {
         // Evaluate section visibility on @MainActor before spawning child tasks
         let wantDDNS = preferences.isSectionEnabled(.ddns)
         let wantPF = preferences.isSectionEnabled(.portForwards)
@@ -436,6 +515,7 @@ final class StatusBarController {
         let ddns = await ddnsResult
         let pf = await pfResult
         let rogue = await rogueResult
+        guard generation == refreshGeneration, !Task.isCancelled else { return }
 
         if wantDDNS, let error = ddns.errorDetail {
             diagnosticsLog.record(.monitoring, level: .error, message: "DDNS fetch failed", detail: error)
@@ -448,9 +528,12 @@ final class StatusBarController {
         }
 
         wifiStatus.updateMonitoring(
-            ddns: ddns.data,
-            portForwards: pf.data,
-            rogueAPs: rogue.data
+            ddns: ddns.errorDetail == nil ? ddns.data : nil,
+            portForwards: pf.errorDetail == nil ? pf.data : nil,
+            rogueAPs: rogue.errorDetail == nil ? rogue.data : nil
         )
+        if !wantDDNS { wifiStatus.dataAvailability[.ddns] = .disabled }
+        if !wantPF { wifiStatus.dataAvailability[.portForwards] = .disabled }
+        if !wantRogue { wifiStatus.dataAvailability[.nearbyAPs] = .disabled }
     }
 }

@@ -93,6 +93,51 @@ final class WiFiStatus {
     // Metadata
     var lastUpdated: Date? = nil
 
+    enum DataSource: String, CaseIterable {
+        case devices = "Devices", wan = "WAN", vpn = "VPN", sessions = "Session history"
+        case accessPoint = "AP statistics", gateway = "Gateway statistics"
+        case ddns = "Dynamic DNS", portForwards = "Port forwards", nearbyAPs = "Nearby APs"
+
+        var menuSection: MenuSection {
+            switch self {
+            case .devices: .network
+            case .wan, .gateway: .internet
+            case .vpn: .vpn
+            case .sessions: .sessionHistory
+            case .accessPoint: .wifi
+            case .ddns: .ddns
+            case .portForwards: .portForwards
+            case .nearbyAPs: .nearbyAPs
+            }
+        }
+    }
+
+    enum Availability: String {
+        case refreshing = "Refreshing", available = "Available"
+        case empty = "No entries returned", unavailable = "Unavailable"
+        case notApplicable = "Not applicable"
+        case disabled = "Disabled"
+    }
+
+    var dataAvailability: [DataSource: Availability] = [:]
+
+    /// Never display the previous poll's optional metrics under a fresh primary timestamp.
+    func beginSupplementalRefresh() {
+        updateDevices(nil)
+        updateWANHealth(nil)
+        updateVPN(nil)
+        updateSessions(nil, devices: [])
+        updateAPStats(nil)
+        updateGateway(nil, device: nil)
+        updateMonitoring(ddns: nil, portForwards: nil, rogueAPs: nil)
+        dataAvailability = Dictionary(uniqueKeysWithValues: DataSource.allCases.map { ($0, .refreshing) })
+    }
+
+    private func availability<T>(of items: [T]?) -> Availability {
+        guard let items else { return .unavailable }
+        return items.isEmpty ? .empty : .available
+    }
+
     enum TrendDirection: Sendable {
         case up, down, stable
 
@@ -106,7 +151,7 @@ final class WiFiStatus {
     }
 
     struct SessionEntry: Identifiable, Sendable {
-        let id = UUID()
+        var id: String { apName }
         let apName: String
         let duration: Int
         let fraction: Double
@@ -247,15 +292,12 @@ final class WiFiStatus {
 
     var formattedDeviceOverview: String? {
         guard let total = totalDevices, let online = onlineDevices else { return nil }
+        if total == 0 { return "No devices returned" }
         if online == total {
             return "\(total) device\(total == 1 ? "" : "s") · all online"
         }
         let offline = total - online
         return "\(online) online · \(offline) offline"
-    }
-
-    var nearbyAPCount: Int {
-        nearbyAPs?.count ?? 0
     }
 
     var firmwareBadge: String? {
@@ -314,23 +356,25 @@ final class WiFiStatus {
         clientsOnSameAP = info.clientsOnSameAP
 
         // Trend indicators
-        if let newSignal = client.signal, let prev = previousSignal {
+        let newSignal = client.signal.flatMap { (-120...0).contains($0) ? $0 : nil }
+        if let newSignal, let prev = previousSignal {
             let diff = newSignal - prev
             signalTrend = diff > 2 ? .up : diff < -2 ? .down : .stable
         } else {
             signalTrend = .stable
         }
-        previousSignal = client.signal
-        signal = client.signal
+        previousSignal = newSignal
+        signal = newSignal
 
-        if let newSat = client.wifiExperienceScore, let prev = previousSatisfaction {
+        let newSat = client.wifiExperienceScore.flatMap { (0...100).contains($0) ? $0 : nil }
+        if let newSat, let prev = previousSatisfaction {
             let diff = newSat - prev
             satisfactionTrend = diff > 2 ? .up : diff < -2 ? .down : .stable
         } else {
             satisfactionTrend = .stable
         }
-        previousSatisfaction = client.wifiExperienceScore
-        satisfaction = client.wifiExperienceScore
+        previousSatisfaction = newSat
+        satisfaction = newSat
 
         // Roam detection
         let newAPName = client.lastUplinkName
@@ -352,13 +396,15 @@ final class WiFiStatus {
     }
 
     func updateAPStats(_ stats: APStats?) {
-        apCPU = stats?.cpuUtilizationPct
-        apMemory = stats?.memoryUtilizationPct
+        apCPU = stats?.cpuUtilizationPct.flatMap { (0...100).contains($0) ? $0 : nil }
+        apMemory = stats?.memoryUtilizationPct.flatMap { (0...100).contains($0) ? $0 : nil }
+        dataAvailability[.accessPoint] = apCPU == nil && apMemory == nil ? .unavailable : .available
     }
 
     func updateWANHealth(_ health: WANHealth?) {
+        dataAvailability[.wan] = health?.status == nil ? .unavailable : .available
         if let health {
-            wanIsUp = health.status == "ok"
+            wanIsUp = health.status.map { $0 == "ok" }
             wanIP = health.wanIP
             wanISP = health.ispName
             wanLatencyMs = health.latencyMs
@@ -383,18 +429,21 @@ final class WiFiStatus {
     func updateGateway(_ stats: GatewayStats?, device: DeviceDTO?) {
         // WAN status now comes from health endpoint via updateWANHealth()
         // Gateway only handles device-level stats
-        gatewayCPU = stats?.cpuUtilizationPct
-        gatewayMemory = stats?.memoryUtilizationPct
+        gatewayCPU = stats?.cpuUtilizationPct.flatMap { (0...100).contains($0) ? $0 : nil }
+        gatewayMemory = stats?.memoryUtilizationPct.flatMap { (0...100).contains($0) ? $0 : nil }
         gatewayUptime = stats?.uptimeSec
         gatewayName = device?.name
+        dataAvailability[.gateway] = gatewayCPU == nil && gatewayMemory == nil && gatewayUptime == nil ? .unavailable : .available
     }
 
     func updateVPN(_ tunnels: [VPNTunnelDTO]?) {
+        dataAvailability[.vpn] = availability(of: tunnels)
         vpnTunnels = (tunnels?.isEmpty == true) ? nil : tunnels
     }
 
-    func updateDevices(_ devices: [DeviceDTO]) {
-        guard !devices.isEmpty else {
+    func updateDevices(_ devices: [DeviceDTO]?) {
+        dataAvailability[.devices] = availability(of: devices)
+        guard let devices else {
             totalDevices = nil
             onlineDevices = nil
             offlineDeviceNames = nil
@@ -413,22 +462,29 @@ final class WiFiStatus {
     }
 
     func updateSessions(_ dtos: [SessionDTO]?, devices: [DeviceDTO]) {
+        dataAvailability[.sessions] = availability(of: dtos)
         guard let dtos, !dtos.isEmpty else {
             sessions = nil
             return
         }
 
+        let devicesByMAC = Dictionary(
+            devices.compactMap { device in device.mac.map { ($0.lowercased(), device) } },
+            uniquingKeysWith: { first, _ in first }
+        )
         var apDurations: [String: Int] = [:]
         for session in dtos {
-            guard let apMac = session.apMac, let duration = session.duration else { continue }
+            guard let apMac = session.apMac, let duration = session.duration, duration >= 0 else { continue }
             let lowered = apMac.lowercased()
-            let name = devices.first(where: { $0.mac?.lowercased() == lowered })?.name ?? apMac
-            apDurations[name, default: 0] += duration
+            let name = devicesByMAC[lowered]?.name ?? apMac
+            let (total, overflow) = apDurations[name, default: 0].addingReportingOverflow(duration)
+            guard !overflow else { continue }
+            apDurations[name] = total
         }
 
         let maxDuration = max(apDurations.values.max() ?? 1, 1)
         sessions = apDurations
-            .sorted { $0.value > $1.value }
+            .sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }
             .map { SessionEntry(
                 apName: $0.key,
                 duration: $0.value,
@@ -441,6 +497,9 @@ final class WiFiStatus {
         portForwards: [PortForwardDTO]?,
         rogueAPs: [RogueAPDTO]?
     ) {
+        dataAvailability[.ddns] = availability(of: ddns)
+        dataAvailability[.portForwards] = availability(of: portForwards)
+        dataAvailability[.nearbyAPs] = availability(of: rogueAPs)
         self.ddnsStatuses = ddns
         self.portForwards = portForwards
         self.nearbyAPs = rogueAPs
@@ -504,6 +563,7 @@ final class WiFiStatus {
         portForwards = nil
         nearbyAPs = nil
         lastUpdated = nil
+        dataAvailability = [:]
     }
 
     func markDisconnected() {

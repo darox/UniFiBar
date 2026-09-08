@@ -1,23 +1,5 @@
 import Foundation
 
-/// Official integration API client — basic info only
-struct ClientDTO: Decodable, Sendable {
-    let ipAddress: String?
-    let macAddress: String?
-    let name: String?
-    let type: String?
-    let uplinkDeviceId: String?
-
-    var ip: String? { ipAddress }
-}
-
-struct ClientListResponse: Decodable, Sendable {
-    let data: [ClientDTO]
-    let totalCount: Int?
-    let limit: Int?
-    let offset: Int?
-}
-
 /// v2 active client — rich WiFi details
 struct V2ClientDTO: Decodable, Sendable {
     let mac: String?

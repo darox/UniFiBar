@@ -3,6 +3,20 @@ import Testing
 
 struct URLValidatorTests {
 
+    @Test(arguments: ["HTTPS://controller.invalid", "http-controller.invalid"])
+    func testSchemeDetection(raw: String) throws {
+        let url = try URLValidator.normalizeAndValidate(raw).get()
+        #expect(url.scheme?.lowercased() == "https")
+        #expect(url.host()?.hasSuffix("controller.invalid") == true)
+    }
+
+    @Test(arguments: ["https://controller.invalid:0", "https://controller.invalid:65536", "ftp://controller.invalid"])
+    func testInvalidTransportRejected(raw: String) {
+        if case .success = URLValidator.normalizeAndValidate(raw) {
+            Issue.record("Invalid transport accepted")
+        }
+    }
+
     @Test func testValidHTTPS() {
         let result = URLValidator.normalizeAndValidate("https://192.168.1.1")
         guard case .success(let url) = result else {

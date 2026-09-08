@@ -1,21 +1,25 @@
 import Darwin
 
 enum DeviceDetector {
-    /// Returns all active IPv4 addresses on `en*` interfaces, ordered by interface name.
-    /// WiFi interfaces (en0) typically come first, followed by Thunderbolt/Ethernet (en1+).
+    /// Returns unique IPv4 addresses on up/running `en*` interfaces, ordered by name.
     static func activeIPv4Addresses() -> [String] {
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddr) == 0, let firstAddr = ifaddr else {
             return []
         }
         defer { freeifaddrs(ifaddr) }
+        return activeIPv4Addresses(startingAt: firstAddr)
+    }
 
-        var results: [String] = []
+    /// The linked-list boundary permits synthetic interfaces without querying the host.
+    static func activeIPv4Addresses(startingAt firstAddr: UnsafeMutablePointer<ifaddrs>?) -> [String] {
+        var results: [(name: String, ip: String)] = []
         var current: UnsafeMutablePointer<ifaddrs>? = firstAddr
 
         while let ifa = current {
             let name = String(cString: ifa.pointee.ifa_name)
-            guard name.hasPrefix("en") else {
+            let activeFlags = UInt32(IFF_UP | IFF_RUNNING)
+            guard name.hasPrefix("en"), ifa.pointee.ifa_flags & activeFlags == activeFlags else {
                 current = ifa.pointee.ifa_next
                 continue
             }
@@ -43,18 +47,16 @@ enum DeviceDetector {
             if result == 0 {
                 let length = hostname.firstIndex(of: 0).map { Int($0) } ?? hostname.count
                 let ip = String(decoding: hostname.prefix(length).map { UInt8(bitPattern: $0) }, as: UTF8.self)
-                if !ip.hasPrefix("169.254") && !results.contains(ip) {
-                    results.append(ip)
+                if !ip.hasPrefix("169.254.") {
+                    results.append((name, ip))
                 }
             }
             current = ifa.pointee.ifa_next
         }
 
-        return results
+        return results.sorted { $0.name < $1.name }.reduce(into: []) { addresses, interface in
+            if !addresses.contains(interface.ip) { addresses.append(interface.ip) }
+        }
     }
 
-    /// Returns the IPv4 address of the first active `en*` interface (WiFi or Ethernet).
-    static func activeIPv4Address() -> String? {
-        activeIPv4Addresses().first
-    }
 }

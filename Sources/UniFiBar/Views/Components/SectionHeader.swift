@@ -30,7 +30,7 @@ struct SubSectionHeader: View {
     var body: some View {
         Text(title)
             .font(.caption2)
-            .foregroundStyle(.quaternary)
+            .foregroundStyle(.secondary)
             .padding(.horizontal, 16)
             .padding(.top, 6)
             .padding(.bottom, 1)

@@ -4,6 +4,25 @@ import Testing
 
 struct DecodeFlexibleArrayTests {
 
+    @Test(arguments: ["ok", "error", "unknown"], ["[]", "null", #"[{"id":"1","name":"Synthetic"}]"#])
+    func explicitLegacyResultCodeIsNotIgnored(code: String, rows: String) {
+        let data = Data("{\"meta\":{\"rc\":\"\(code)\"},\"data\":\(rows)}".utf8)
+        let result = UniFiClient.decodeFlexibleArray(TestItem.self, from: data, endpoint: "fixture")
+        #expect((result != nil) == (code == "ok"))
+    }
+
+    @Test(arguments: [(#"{"features":["wan"]}"#, true), (#"{}"#, false),
+                      (#"{"model":"UDM-Pro"}"#, true), (#"{"model":"U7-Pro"}"#, false)])
+    func gatewayClassificationDoesNotRequireAModel(json: String, expected: Bool) throws {
+        let device = try JSONDecoder().decode(DeviceDTO.self, from: Data(json.utf8))
+        #expect(device.isGateway == expected)
+    }
+
+    @Test(arguments: ["{}", "{\"error\":\"unauthorized\"}", "{\"meta\":{\"rc\":\"error\"}}"])
+    func testMissingDataIsNotAnEmptySuccess(json: String) {
+        #expect(UniFiClient.decodeFlexibleArray(TestItem.self, from: Data(json.utf8), endpoint: "fixture") == nil)
+    }
+
     // Simple DTO for testing decode
     private struct TestItem: Decodable, Sendable {
         let id: String

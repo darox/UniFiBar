@@ -6,6 +6,36 @@ import Testing
 struct StatusBarControllerTests {
 
     private actor FakeClient: UniFiClientProtocol {
+        enum Pause: Sendable { case site, selfInfo, monitoring }
+        let pausedFetches = AsyncStream<Void>.makeStream()
+        private var pause: Pause?
+        private var resumeFetch: CheckedContinuation<Void, Never>?
+        let sessionStarted = AsyncStream<Void>.makeStream()
+        private var waitForSessionCancellation = false
+        private(set) var sessionWasCancelled = false
+        func suspendSessionsUntilCancelled() { waitForSessionCancellation = true }
+        func setMonitoringFailure(_ fails: Bool) {
+            ddnsResult = fails ? (nil, "HTTP 500") : ([], nil)
+            pfResult = ([], nil)
+        }
+
+        func pauseAt(_ point: Pause) { pause = point }
+        func resume() {
+            pause = nil
+            resumeFetch?.resume()
+            resumeFetch = nil
+        }
+        private func waitIfPaused(_ point: Pause) async {
+            guard pause == point else { return }
+            await withCheckedContinuation {
+                resumeFetch = $0
+                pausedFetches.continuation.yield(())
+            }
+        }
+        func setSiteId(_ value: String) { siteIdToReturn = value }
+        func setDDNSHost(_ host: String) {
+            ddnsResult = ([DDNSStatusDTO(status: "good", service: "fixture", hostName: host, login: nil, interface: nil)], nil)
+        }
         let siteFetches = AsyncStream<Void>.makeStream()
         private(set) var siteFetchCount = 0
         private(set) var invalidationCount = 0
@@ -42,11 +72,13 @@ struct StatusBarControllerTests {
         func fetchSiteId() async throws -> String {
             siteFetchCount += 1
             siteFetches.continuation.yield(())
+            await waitIfPaused(.site)
             if let e = _fetchSiteError { throw e }
             return siteIdToReturn
         }
 
         func fetchSelfV2() async throws -> SelfInfo {
+            await waitIfPaused(.selfInfo)
             if let e = _fetchSelfError { throw e }
             return selfInfoToReturn
         }
@@ -60,12 +92,24 @@ struct StatusBarControllerTests {
         func fetchWANHealth() async -> WANHealth? { wanHealthToReturn }
         func fetchGatewayStats(deviceId: String, siteId: String) async -> GatewayStats? { gatewayStatsToReturn }
         func fetchAPStats(deviceId: String, siteId: String) async -> APStats? { apStatsToReturn }
-        func fetchSessionHistory(mac: String) async -> [SessionDTO]? { sessionsToReturn }
-        func fetchDDNSStatus() async -> (data: [DDNSStatusDTO]?, errorDetail: String?) { ddnsResult }
+        func fetchSessionHistory(mac: String) async -> [SessionDTO]? {
+            if waitForSessionCancellation {
+                sessionStarted.continuation.yield(())
+                do { try await Task.sleep(for: .seconds(60)) }
+                catch { sessionWasCancelled = Task.isCancelled }
+            }
+            return sessionsToReturn
+        }
+        func fetchDDNSStatus() async -> (data: [DDNSStatusDTO]?, errorDetail: String?) {
+            await waitIfPaused(.monitoring)
+            return ddnsResult
+        }
         func fetchPortForwards() async -> (data: [PortForwardDTO]?, errorDetail: String?) { pfResult }
         func fetchRogueAPs() async -> (data: [RogueAPDTO]?, errorDetail: String?) { rogueResult }
         var certificateChanged: Bool { certChangedFlag }
-        func resetCertificatePin() async {}
+        private var resetError: UniFiError?
+        func setResetError() { resetError = .httpError(statusCode: 500) }
+        func resetCertificatePin() async throws { if let resetError { throw resetError } }
         func resetSiteCache() async {}
         func invalidate() async { invalidationCount += 1 }
     }
@@ -174,7 +218,255 @@ struct StatusBarControllerTests {
         }
     }
 
+    @Test(arguments: [false, true])
+    func testConnectionValidationAlwaysInvalidatesClient(fails: Bool) async throws {
+        try await withDefaults { defaults in
+            let validation = FakeClient()
+            if fails { await validation.setFetchSiteError(UniFiError.httpError(statusCode: 401)) }
+            let controller = makeController(fake: FakeClient(), defaults: defaults)
+            let url = try #require(URL(string: "https://new.invalid"))
+            do {
+                try await controller.connect(using: validation, url: url, apiKey: "synthetic-key", allowSelfSigned: false)
+                #expect(!fails)
+            } catch { #expect(fails) }
+            let poll = controller.pollTask
+            controller.tearDown()
+            await poll?.value
+            #expect(await validation.invalidationCount == 1)
+            #expect(controller.preferences.cachedURL == (fails ? nil : url.absoluteString))
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)), arguments: ["cancel", "supersede", "reset"])
+    func testObsoleteValidationCannotSave(action: String) async throws {
+        try await withDefaults { defaults in
+            let old = FakeClient()
+            await old.pauseAt(.site)
+            let prefs = PreferencesManager(defaults: defaults, keychain: FakeKeychain())
+            var loads = 0
+            let controller = StatusBarController(fixturePreferences: prefs) {
+                loads += 1
+                return nil
+            }
+            let url = try #require(URL(string: "https://old.invalid"))
+            var paused = old.pausedFetches.stream.makeAsyncIterator()
+            let operation = Task {
+                try await controller.connect(using: old, url: url, apiKey: "old-key", allowSelfSigned: false)
+            }
+            await paused.next()
+            if action == "cancel" { operation.cancel() }
+            // Mirrors reset confirmation's synchronous prefix; native cleanup is not run here.
+            if action == "reset" { await controller.resetState()?.value }
+            if action == "supersede" {
+                let newURL = try #require(URL(string: "https://new.invalid"))
+                try await controller.connect(using: FakeClient(), url: newURL, apiKey: "new-key", allowSelfSigned: false)
+            }
+            await old.resume()
+            await #expect(throws: CancellationError.self) { try await operation.value }
+            #expect(await old.invalidationCount == (action == "reset" ? 2 : 1))
+            #expect(prefs.cachedURL == (action == "supersede" ? "https://new.invalid" : nil))
+            #expect(loads == (action == "supersede" ? 1 : 0))
+            controller.tearDown()
+        }
+    }
+
+    @Test func testPinResetFailureKeepsCurrentClient() async {
+        await withDefaults { defaults in
+            let fake = FakeClient()
+            await fake.setResetError()
+            var loads = 0
+            let prefs = PreferencesManager(defaults: defaults, keychain: FakeKeychain())
+            let controller = StatusBarController(fixturePreferences: prefs) { loads += 1; return fake }
+            await controller.start()
+            let poll = controller.pollTask
+            controller.stopPolling()
+            await poll?.value
+            await controller.resetCertPin()
+            #expect(loads == 1)
+            #expect(await fake.invalidationCount == 0)
+            #expect(controller.diagnosticsLog.recentEvents.first?.level == .error)
+            controller.tearDown()
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func testResetBlocksNewConnectionsAndDrainsValidationBeforeCleanup() async throws {
+        try await withDefaults { defaults in
+            let keychain = FakeKeychain()
+            let prefs = PreferencesManager(defaults: defaults, keychain: keychain,
+                                           removePins: {}, unregisterLoginItem: {})
+            try await prefs.save(controllerURL: "https://old.invalid", apiKey: "old-key", allowSelfSigned: false)
+            let active = FakeClient()
+            var loads = 0
+            let controller = StatusBarController(fixturePreferences: prefs) { loads += 1; return active }
+            defer { controller.tearDown() }
+            await controller.start()
+            let oldPoll = controller.pollTask
+            let validation = FakeClient()
+            await validation.pauseAt(.site)
+            var validationPauses = validation.pausedFetches.stream.makeAsyncIterator()
+            let url = try #require(URL(string: "https://new.invalid"))
+            let pending = Task {
+                try await controller.connect(using: validation, url: url, apiKey: "new-key", allowSelfSigned: false)
+            }
+            await validationPauses.next()
+            await keychain.pauseNext(.delete)
+            var deletionPauses = keychain.pauses.stream.makeAsyncIterator()
+            let cleanup = controller.resetConfiguration()
+            #expect(prefs.isResetting)
+            #expect(controller.pollTask == nil)
+            let sameCleanup = controller.resetConfiguration()
+            #expect(await deletionPauses.next() == .delete)
+            #expect(await active.invalidationCount == 1)
+            #expect(await validation.invalidationCount == 1)
+            let rejected = FakeClient()
+            await #expect(throws: CancellationError.self) {
+                try await controller.connect(using: rejected, url: url, apiKey: "rejected-key", allowSelfSigned: false)
+            }
+            #expect(await rejected.siteFetchCount == 0)
+            #expect(await rejected.invalidationCount == 1)
+            await controller.start()
+            await controller.reconfigure()
+            #expect(controller.refreshNow() == nil)
+            #expect(loads == 1)
+            await keychain.resume()
+            try await cleanup.value
+            try await sameCleanup.value
+            await validation.resume() // Late transport completion must not revive the old attempt.
+            await #expect(throws: CancellationError.self) { try await pending.value }
+            await oldPoll?.value
+            #expect(await keychain.deleteCount == KeychainHelper.Key.allCases.count)
+            #expect(try await keychain.read(.credentials) == nil)
+            #expect(!prefs.isConfigured && !prefs.isResetting)
+            #expect(prefs.cachedAPIKey == nil)
+            #expect(controller.pollTask == nil && !controller.wifiStatus.isConnected)
+            await controller.start()
+            await controller.reconfigure()
+            #expect(loads == 1) // Reset intent also blocks automatic reconnection after cleanup.
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func testCancellationAfterCommitStartsDoesNotReconnectOrSplitPair() async throws {
+        try await withDefaults { defaults in
+            let keychain = FakeKeychain()
+            let prefs = PreferencesManager(defaults: defaults, keychain: keychain)
+            var loads = 0
+            let controller = StatusBarController(fixturePreferences: prefs) { loads += 1; return nil }
+            let url = try #require(URL(string: "https://committed.invalid"))
+            await keychain.pauseNext(.save)
+            var pauses = keychain.pauses.stream.makeAsyncIterator()
+            let operation = Task {
+                try await controller.connect(using: FakeClient(), url: url, apiKey: "committed-key", allowSelfSigned: false)
+            }
+            #expect(await pauses.next() == .save)
+            operation.cancel()
+            await keychain.resume()
+            await #expect(throws: CancellationError.self) { try await operation.value }
+            #expect(loads == 0)
+            #expect(controller.pollTask == nil)
+            let restored = PreferencesManager(defaults: defaults, keychain: keychain)
+            await restored.checkConfiguration()
+            #expect(restored.cachedURL == url.absoluteString && restored.cachedAPIKey == "committed-key")
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func testUpdateChecksContinueAfterFirstSuccessfulPoll() async {
+        await withDefaults { defaults in
+            var date = Date(timeIntervalSince1970: 1_788_825_600)
+            var checks = 0
+            let requests = AsyncStream<Void>.makeStream()
+            defer { requests.continuation.finish() }
+            var requestSignals = requests.stream.makeAsyncIterator()
+            let checker = UpdateChecker(defaults: defaults, now: { date }, fetch: { request in
+                checks += 1
+                requests.continuation.yield(())
+                let url = try #require(request.url)
+                let response = try #require(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil))
+                let data = Data(#"{"tag_name":"v999.0.0","html_url":"https://github.com/darox/UniFiBar/releases/tag/v999.0.0"}"#.utf8)
+                return (data, response)
+            })
+            let fake = FakeClient()
+            let controller = StatusBarController(
+                fixturePreferences: PreferencesManager(defaults: defaults, keychain: FakeKeychain()),
+                updateChecker: checker, clientLoader: { fake })
+            await refresh(controller)
+            await requestSignals.next()
+            await checker.schedulePeriodicCheck()?.value
+            #expect(checks == 1)
+            date.addTimeInterval(86_400)
+            await controller.refreshNow()?.value
+            await requestSignals.next() // The controller must initiate this request, not the test.
+            await checker.schedulePeriodicCheck()?.value
+            #expect(checks == 2)
+            controller.tearDown()
+        }
+    }
+
     // MARK: - Site discovery errors
+
+    @Test(.timeLimit(.minutes(1)), arguments: [FakeClient.Pause.site, .selfInfo, .monitoring])
+    private func testReconfigureDiscardsOldResponses(point: FakeClient.Pause) async {
+        await withDefaults { defaults in
+            let old = FakeClient()
+            await old.pauseAt(point)
+            if point == .site { await old.setFetchSiteError(UniFiError.httpError(statusCode: 401)) }
+            if point == .selfInfo { await old.setFetchSelfError(UniFiError.httpError(statusCode: 401)) }
+            await old.setDDNSHost("old.invalid")
+            let replacement = FakeClient()
+            await replacement.setSiteId("new-site")
+            await replacement.setDDNSHost("new.invalid")
+            let prefs = PreferencesManager(defaults: defaults, keychain: FakeKeychain())
+            prefs.setSectionEnabled(.ddns, enabled: true)
+            var loads = 0
+            let controller = StatusBarController(fixturePreferences: prefs) {
+                loads += 1
+                return loads == 1 ? old : replacement
+            }
+            var paused = old.pausedFetches.stream.makeAsyncIterator()
+            await controller.start()
+            let oldPoll = controller.pollTask
+            await paused.next()
+            await controller.reconfigure()
+            let newPoll = controller.pollTask
+            controller.stopPolling()
+            await newPoll?.value
+            #expect(controller.wifiStatus.isConnected)
+            #expect(prefs.siteId == "new-site")
+            #expect(controller.wifiStatus.ddnsStatuses?.first?.hostName == "new.invalid")
+
+            await old.resume() // Simulate a transport that completes despite cancellation.
+            await oldPoll?.value
+            #expect(controller.wifiStatus.isConnected)
+            #expect(controller.wifiStatus.errorState == nil)
+            #expect(controller.consecutiveErrorCount == 0)
+            #expect(controller.wifiStatus.ddnsStatuses?.first?.hostName == "new.invalid")
+            controller.tearDown()
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func testResetDiscardsPendingMonitoring() async {
+        await withDefaults { defaults in
+            let fake = FakeClient()
+            await fake.pauseAt(.monitoring)
+            await fake.setDDNSHost("old.invalid")
+            let controller = makeController(fake: fake, defaults: defaults)
+            controller.preferences.setSectionEnabled(.ddns, enabled: true)
+            var paused = fake.pausedFetches.stream.makeAsyncIterator()
+            await controller.start()
+            let poll = controller.pollTask
+            await paused.next()
+            controller.resetState()
+            await fake.resume()
+            await poll?.value
+            #expect(!controller.wifiStatus.isConnected)
+            #expect(controller.wifiStatus.ddnsStatuses == nil)
+            #expect(controller.wifiStatus.errorState == nil)
+            controller.tearDown()
+        }
+    }
 
     @Test func testSiteDiscoveryAuthFailure() async {
         await withDefaults { defaults in
@@ -197,7 +489,7 @@ struct StatusBarControllerTests {
 
             await refresh(controller)
 
-            #expect(controller.wifiStatus.errorState == .controllerUnreachable(reason: "UniFiBar.UniFiError code=0"))
+            #expect(controller.wifiStatus.errorState == .controllerUnreachable(reason: "Server returned HTTP 500."))
             #expect(controller.consecutiveErrorCount == 1)
         }
     }
@@ -295,6 +587,46 @@ struct StatusBarControllerTests {
             #expect(controller.wifiStatus.satisfaction == 85)
             #expect(controller.wifiStatus.wanIsUp == true)
             #expect(controller.wifiStatus.totalDevices == nil)
+            #expect(controller.wifiStatus.dataAvailability[.devices] == .unavailable)
+            #expect(controller.wifiStatus.dataAvailability[.gateway] == .unavailable)
+            #expect(controller.wifiStatus.dataAvailability[.wan] == .available)
+        }
+    }
+
+    @Test func optionalFailuresEmptyAndDisabledStatesRecoverIndependently() async {
+        await withDefaults { defaults in
+            let fake = FakeClient()
+            let controller = makeController(fake: fake, defaults: defaults)
+            controller.preferences.setSectionEnabled(.ddns, enabled: true)
+            controller.preferences.setSectionEnabled(.portForwards, enabled: true)
+            await fake.setMonitoringFailure(true)
+            await refresh(controller)
+            #expect(controller.wifiStatus.isConnected)
+            #expect(controller.wifiStatus.dataAvailability[.ddns] == .unavailable)
+            #expect(controller.wifiStatus.dataAvailability[.portForwards] == .empty)
+            #expect(controller.wifiStatus.dataAvailability[.nearbyAPs] == .disabled)
+            await fake.setMonitoringFailure(false)
+            await refresh(controller)
+            #expect(controller.wifiStatus.dataAvailability[.ddns] == .empty)
+            controller.resetState()
+            #expect(controller.wifiStatus.dataAvailability.isEmpty)
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func stoppingPollingCancelsSessionChildRequest() async throws {
+        try await withDefaults { defaults in
+            let fake = FakeClient()
+            await fake.suspendSessionsUntilCancelled()
+            let controller = makeController(fake: fake, defaults: defaults)
+            defer { controller.tearDown() }
+            var started = fake.sessionStarted.stream.makeAsyncIterator()
+            await controller.start()
+            let poll = try #require(controller.pollTask)
+            await started.next()
+            controller.stopPolling()
+            await poll.value
+            #expect(await fake.sessionWasCancelled)
         }
     }
 

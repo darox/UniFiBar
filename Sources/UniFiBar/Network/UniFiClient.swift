@@ -16,7 +16,7 @@ protocol UniFiClientProtocol: Sendable {
     func fetchPortForwards() async -> (data: [PortForwardDTO]?, errorDetail: String?)
     func fetchRogueAPs() async -> (data: [RogueAPDTO]?, errorDetail: String?)
     var certificateChanged: Bool { get async }
-    func resetCertificatePin() async
+    func resetCertificatePin() async throws
     func resetSiteCache() async
     func invalidate() async
 }
@@ -25,19 +25,31 @@ actor UniFiClient: UniFiClientProtocol {
     private let baseURL: URL
     private let apiKey: String
     private let session: URLSession
+    private let redirectDelegate: SameOriginRedirectDelegate
     private let pinnedCertDelegate: PinnedCertDelegate?
-    private var siteId: String?
+    private struct Site: Decodable, Sendable {
+        let id: String
+        let internalReference: String
+    }
+    private var site: Site?
+    private let fixtureTransport: (@Sendable (URLRequest) async throws -> Data)?
+    private let localAddresses: @Sendable () -> [String]
+    private var invalidated = false
 
     /// Clears the cached site ID so the next fetchSiteId() will rediscover it.
     func resetSiteCache() {
-        siteId = nil
+        site = nil
     }
 
     private static let requestTimeout: TimeInterval = 15
     private static let logger = Logger(subsystem: "com.unifbar.app", category: "UniFiClient")
 
-    init(baseURL: URL, apiKey: String, allowSelfSigned: Bool = false) {
+    init(baseURL: URL, apiKey: String, allowSelfSigned: Bool = false,
+         confirmCertificate: (@Sendable (PinnedCertDelegate.CertificateDetails) async -> Bool)? = nil,
+         pinStore: CertificatePinStore = .keychain) {
         self.baseURL = baseURL
+        self.fixtureTransport = nil
+        self.localAddresses = { DeviceDetector.activeIPv4Addresses() }
         // Strip control characters to prevent HTTP header injection
         self.apiKey = apiKey.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }
             .map(String.init).joined()
@@ -45,8 +57,10 @@ actor UniFiClient: UniFiClientProtocol {
         if allowSelfSigned {
             let config = URLSessionConfiguration.default
             config.timeoutIntervalForRequest = Self.requestTimeout
-            let delegate = PinnedCertDelegate(host: baseURL.host() ?? "")
+            config.timeoutIntervalForResource = 30
+            let delegate = PinnedCertDelegate(host: baseURL.host() ?? "", pinStore: pinStore, confirmCertificate: confirmCertificate)
             self.pinnedCertDelegate = delegate
+            self.redirectDelegate = SameOriginRedirectDelegate(certificateDelegate: delegate)
             self.session = URLSession(
                 configuration: config,
                 delegate: delegate,
@@ -55,9 +69,23 @@ actor UniFiClient: UniFiClientProtocol {
         } else {
             let config = URLSessionConfiguration.default
             config.timeoutIntervalForRequest = Self.requestTimeout
+            config.timeoutIntervalForResource = 30
             self.pinnedCertDelegate = nil
+            self.redirectDelegate = SameOriginRedirectDelegate()
             self.session = URLSession(configuration: config)
         }
+    }
+
+    /// Offline contract tests: no native pins, credentials, interface lookup or network fallback.
+    init(fixtureTransport: @escaping @Sendable (URLRequest) async throws -> Data,
+         localAddresses: @escaping @Sendable () -> [String] = { [] }) {
+        baseURL = URL(string: "https://controller.invalid")!
+        apiKey = "synthetic-key"
+        self.fixtureTransport = fixtureTransport
+        self.localAddresses = localAddresses
+        pinnedCertDelegate = nil
+        redirectDelegate = SameOriginRedirectDelegate()
+        session = URLSession(configuration: .ephemeral)
     }
 
     /// Whether the certificate pin has detected a mismatch (cert changed since first pin).
@@ -68,85 +96,171 @@ actor UniFiClient: UniFiClientProtocol {
 
     /// Clear the stored certificate pin so the next connection re-pins.
     /// Call this after the user confirms they renewed their controller certificate.
-    func resetCertificatePin() {
-        if let host = baseURL.host() {
-            PinnedCertDelegate.deletePinFromKeychain(host: host)
+    func resetCertificatePin() throws {
+        guard !invalidated else { throw CancellationError() }
+        if let pinnedCertDelegate {
+            try pinnedCertDelegate.resetPin()
+        } else if let host = baseURL.host() {
+            try CertificatePinStore.keychain.remove(host: host)
         }
     }
 
     /// Invalidate the URLSession so in-flight requests are cancelled and the delegate is released.
     func invalidate() {
+        invalidated = true
+        pinnedCertDelegate?.invalidate()
         session.invalidateAndCancel()
     }
 
     // MARK: - Core Requests
 
-    private func request(_ path: String) async throws -> Data {
-        let url = baseURL.appending(path: path)
+    private func request(_ path: String, body: [String: Any]? = nil, query: [URLQueryItem] = []) async throws -> Data {
+        guard !invalidated else { throw CancellationError() }
+        try Task.checkCancellation()
+        let validatedURL = try URLValidator.normalizeAndValidate(baseURL.absoluteString).get()
+        let url = validatedURL.appending(path: path).appending(queryItems: query)
         var req = URLRequest(url: url)
         req.setValue(apiKey, forHTTPHeaderField: "X-API-KEY")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        let (data, response) = try await session.data(for: req)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw UniFiError.httpError(statusCode: -1)
+        if let body {
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
-        guard httpResponse.statusCode == 200 else {
-            throw UniFiError.httpError(statusCode: httpResponse.statusCode)
+        if let fixtureTransport { return try await fixtureTransport(req) }
+        do {
+            return try await responseData(for: req)
+        } catch {
+            try Task.checkCancellation()
+            // No URLSession task is running while the user verifies the fingerprint.
+            // Retry once, only after approval; TLS rechecks validity and the pinned key.
+            guard let delegate = pinnedCertDelegate, await delegate.approvePendingCertificate() else {
+                throw pinnedCertDelegate?.failure ?? error
+            }
+            try Task.checkCancellation()
+            return try await responseData(for: req)
         }
-        return data
     }
 
-    private func post(_ path: String, body: [String: Any]) async throws -> Data {
-        let url = baseURL.appending(path: path)
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue(apiKey, forHTTPHeaderField: "X-API-KEY")
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, response) = try await session.data(for: req)
+    private func responseData(for req: URLRequest) async throws -> Data {
+        let bytes: URLSession.AsyncBytes
+        let response: URLResponse
+        do {
+            (bytes, response) = try await session.bytes(for: req, delegate: redirectDelegate)
+        } catch {
+            try Task.checkCancellation()
+            // URLSession reports a rejected trust challenge as an opaque cancellation (-999).
+            if let failure = pinnedCertDelegate?.failure { throw failure }
+            throw error
+        }
+        defer { bytes.task.cancel() }
+        return try await Self.boundedResponseData(bytes, response: response)
+    }
+
+    /// ponytail: 16 MiB per controller response; large sites need bounded pagination, not a larger silent cap.
+    nonisolated static func boundedResponseData<Bytes: AsyncSequence>(
+        _ bytes: Bytes, response: URLResponse, limit: Int = 16 * 1_024 * 1_024
+    ) async throws -> Data where Bytes.Element == UInt8 {
+        try Task.checkCancellation()
         guard let httpResponse = response as? HTTPURLResponse else {
             throw UniFiError.httpError(statusCode: -1)
         }
         guard httpResponse.statusCode == 200 else {
             throw UniFiError.httpError(statusCode: httpResponse.statusCode)
         }
+        guard limit >= 0, response.expectedContentLength <= Int64(limit) else {
+            throw URLError(.dataLengthExceedsMaximum)
+        }
+        var data = Data()
+        for try await byte in bytes {
+            try Task.checkCancellation()
+            guard data.count < limit else { throw URLError(.dataLengthExceedsMaximum) }
+            data.append(byte)
+        }
+        try Task.checkCancellation()
         return data
     }
 
     // MARK: - Site Discovery
 
     func fetchSiteId() async throws -> String {
-        if let cached = siteId { return cached }
+        guard !invalidated else { throw CancellationError() }
+        if let site { return site.id }
+        let sites = try await fetchPages(Site.self, path: "/proxy/network/integration/v1/sites", id: { $0.id })
+        guard !sites.isEmpty else { throw UniFiError.noSitesFound }
+        guard sites.allSatisfy({ Self.isValidIdentifier($0.internalReference) }),
+              Set(sites.map(\.internalReference)).count == sites.count else {
+            throw UniFiError.incompleteResponse
+        }
+        // Keep the existing default-site product scope, never arbitrary response ordering.
+        guard let selected = sites.first(where: { $0.internalReference == "default" })
+                ?? (sites.count == 1 ? sites.first : nil) else { throw UniFiError.ambiguousSite }
+        guard !invalidated else { throw CancellationError() }
+        site = selected
+        return selected.id
+    }
 
-        struct SitesResponse: Decodable, Sendable {
-            let data: [SiteEntry]?
-            struct SiteEntry: Decodable, Sendable {
-                let id: String
-                let name: String?
+    private func olderSiteReference() async throws -> String {
+        _ = try await fetchSiteId()
+        guard let site else { throw UniFiError.noSitesFound }
+        return site.internalReference
+    }
+
+    private struct Page<T: Decodable & Sendable>: Decodable, Sendable {
+        let data: [T]
+        let count: Int
+        let offset: Int
+        let limit: Int
+        let totalCount: Int
+    }
+
+    /// ponytail: at most 5,000 entries, 100 pages and 16 MiB per collection.
+    /// Exceeding the budget fails visibly; larger deployments need a deliberate product limit.
+    private func fetchPages<T: Decodable & Sendable>(
+        _ type: T.Type, path: String, id: @Sendable (T) -> String?
+    ) async throws -> [T] {
+        var result: [T] = []
+        var ids = Set<String>()
+        var total: Int?
+        var bytesRemaining = 16 * 1_024 * 1_024
+        for _ in 0..<100 {
+            let data = try await request(path, query: [
+                URLQueryItem(name: "offset", value: String(result.count)),
+                URLQueryItem(name: "limit", value: "200")
+            ])
+            try Task.checkCancellation()
+            guard data.count <= bytesRemaining else { throw UniFiError.incompleteResponse }
+            bytesRemaining -= data.count
+            let page = try JSONDecoder().decode(Page<T>.self, from: data)
+            guard page.offset == result.count, page.count == page.data.count,
+                  (0...200).contains(page.limit), page.count <= page.limit,
+                  (0...5_000).contains(page.totalCount),
+                  page.count <= page.totalCount - result.count,
+                  total == nil || total == page.totalCount else { throw UniFiError.incompleteResponse }
+            total = page.totalCount
+            for item in page.data {
+                guard let identifier = id(item), Self.isValidIdentifier(identifier),
+                      ids.insert(identifier).inserted else { throw UniFiError.incompleteResponse }
             }
+            result.append(contentsOf: page.data)
+            if result.count == page.totalCount { return result }
+            guard page.count > 0 else { throw UniFiError.incompleteResponse }
         }
-
-        let data = try await request("/proxy/network/integrations/v1/sites")
-        let response = try JSONDecoder().decode(SitesResponse.self, from: data)
-        guard let site = response.data?.first else {
-            throw UniFiError.noSitesFound
-        }
-        siteId = site.id
-        return site.id
+        throw UniFiError.incompleteResponse
     }
 
     // MARK: - v2 Active Clients (primary data source)
 
     func fetchSelfV2() async throws -> SelfInfo {
-        let data = try await request("/proxy/network/v2/api/site/default/clients/active")
-        let allClients = try JSONDecoder().decode([V2ClientDTO].self, from: data)
-        // Sanity cap to prevent memory exhaustion from a compromised controller
-        let clients = allClients.count > 5_000 ? Array(allClients.prefix(5_000)) : allClients
+        let reference = try await olderSiteReference()
+        let data = try await request("/proxy/network/v2/api/site/\(reference)/clients/active")
+        let clients = try JSONDecoder().decode([V2ClientDTO].self, from: data)
+        // ponytail: reject over 10,000 returned clients; never silently search a prefix.
+        guard clients.count <= 10_000 else { throw UniFiError.incompleteResponse }
 
         // Try each active interface IP against the UniFi client list.
-        // WiFi IPs (en0) are tried first since they're more likely to be in UniFi.
-        let myIPs = DeviceDetector.activeIPv4Addresses()
+        // Interface-name order is deterministic, not a guarantee of Wi-Fi or default-route priority.
+        let myIPs = localAddresses()
         for ip in myIPs {
             if let me = clients.first(where: { $0.ip == ip }) {
                 let totalClients = clients.count
@@ -164,16 +278,7 @@ actor UniFiClient: UniFiClientProtocol {
             }
         }
 
-        // No matching client found — Mac is on a network not managed by UniFi
-        // (e.g., wired through a non-UniFi router). Show limited wired connection view.
-        if let wiredIP = myIPs.first {
-            return SelfInfo(
-                client: V2ClientDTO(ip: wiredIP),
-                totalClients: clients.count,
-                clientsOnSameAP: 1
-            )
-        }
-
+        // Absence from this site's list does not establish Ethernet connectivity.
         throw UniFiError.selfNotFound
     }
 
@@ -186,7 +291,7 @@ actor UniFiClient: UniFiClientProtocol {
         }
         do {
             let data = try await request(
-                "/proxy/network/integrations/v1/sites/\(siteId)/devices/\(deviceId)/statistics/latest"
+                "/proxy/network/integration/v1/sites/\(siteId)/devices/\(deviceId)/statistics/latest"
             )
             let response = try JSONDecoder().decode(APStatsResponse.self, from: data)
             return response.toAPStats
@@ -201,8 +306,17 @@ actor UniFiClient: UniFiClientProtocol {
     struct LegacyResponse<T: Decodable & Sendable>: Decodable, Sendable {
         let data: [T]?
 
-        init(data: [T]?) {
-            self.data = data
+        private enum CodingKeys: String, CodingKey { case data, meta }
+        private struct Metadata: Decodable { let rc: String }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            if let meta = try container.decodeIfPresent(Metadata.self, forKey: .meta), meta.rc != "ok" {
+                throw DecodingError.dataCorruptedError(forKey: .meta, in: container,
+                    debugDescription: "Legacy response did not report success")
+            }
+            // An explicit null is empty; a missing data key is not a successful response.
+            data = try container.decode([T]?.self, forKey: .data)
         }
     }
 
@@ -214,16 +328,18 @@ actor UniFiClient: UniFiClientProtocol {
         from data: Data,
         endpoint: String
     ) -> [T]? {
-        // Try wrapped format first: { "data": [...] } or { "data": null }
+        let array: [T]?
         if let response = try? JSONDecoder().decode(LegacyResponse<T>.self, from: data) {
-            return response.data ?? []
+            array = response.data ?? []
+        } else {
+            array = try? JSONDecoder().decode([T].self, from: data)
         }
-        // Try bare array: [...]
-        if let array = try? JSONDecoder().decode([T].self, from: data) {
+        // ponytail: 5,000 legacy entries; larger lists fail visibly instead of freezing the menu or truncating it.
+        if let array, array.count <= 5_000 {
             return array
         }
         // Log diagnostic info about the response (avoid logging raw data to prevent credential/data leaks)
-        Self.logger.error("Failed to decode \(endpoint): both formats failed. Response size: \(data.count) bytes")
+        Self.logger.error("Failed to decode \(endpoint) or exceeded 5,000 entries. Response size: \(data.count) bytes")
         return nil
     }
 
@@ -231,9 +347,10 @@ actor UniFiClient: UniFiClientProtocol {
         let oneDayAgo = Int(Date.now.timeIntervalSince1970) - 86400
         do {
             let body: [String: Any] = ["macs": [mac], "start": oneDayAgo]
-            let data = try await post("/proxy/network/api/s/default/stat/session", body: body)
+            let reference = try await olderSiteReference()
+            let data = try await request("/proxy/network/api/s/\(reference)/stat/session", body: body)
             let sessions = Self.decodeFlexibleArray(SessionDTO.self, from: data, endpoint: "session_history")
-            return (sessions?.isEmpty == true) ? nil : sessions?.prefix(1_000).map { $0 }
+            return sessions
         } catch {
             Self.logger.error("Failed to fetch session history: \(Self.safeErrorDescription(error))")
             return nil
@@ -243,10 +360,8 @@ actor UniFiClient: UniFiClientProtocol {
     // MARK: - Devices
 
     func fetchDevices(siteId: String) async throws -> [DeviceDTO] {
-        guard Self.isValidIdentifier(siteId) else { return [] }
-        let data = try await request("/proxy/network/integrations/v1/sites/\(siteId)/devices")
-        let devices = Self.decodeFlexibleArray(DeviceDTO.self, from: data, endpoint: "devices") ?? []
-        return devices.count > 500 ? Array(devices.prefix(500)) : devices
+        guard Self.isValidIdentifier(siteId) else { throw UniFiError.invalidURL }
+        return try await fetchPages(DeviceDTO.self, path: "/proxy/network/integration/v1/sites/\(siteId)/devices", id: { $0.id })
     }
 
     // MARK: - VPN Tunnels
@@ -254,9 +369,8 @@ actor UniFiClient: UniFiClientProtocol {
     func fetchVPNTunnels(siteId: String) async -> [VPNTunnelDTO]? {
         guard Self.isValidIdentifier(siteId) else { return nil }
         do {
-            let data = try await request("/proxy/network/integrations/v1/sites/\(siteId)/vpn/tunnels")
-            let response = try JSONDecoder().decode(VPNTunnelResponse.self, from: data)
-            return response.data.isEmpty ? nil : response.data
+            return try await fetchPages(VPNTunnelDTO.self,
+                path: "/proxy/network/integration/v1/sites/\(siteId)/vpn/site-to-site-tunnels", id: { $0.officialId })
         } catch {
             Self.logger.error("Failed to fetch VPN tunnels: \(Self.safeErrorDescription(error))")
             return nil
@@ -267,7 +381,8 @@ actor UniFiClient: UniFiClientProtocol {
 
     func fetchWANHealth() async -> WANHealth? {
         do {
-            let data = try await request("/proxy/network/api/s/default/stat/health")
+            let reference = try await olderSiteReference()
+            let data = try await request("/proxy/network/api/s/\(reference)/stat/health")
             let response = try JSONDecoder().decode(WANHealthResponse.self, from: data)
             return response.toWANHealth()
         } catch {
@@ -285,7 +400,7 @@ actor UniFiClient: UniFiClientProtocol {
         }
         do {
             let data = try await request(
-                "/proxy/network/integrations/v1/sites/\(siteId)/devices/\(deviceId)/statistics/latest"
+                "/proxy/network/integration/v1/sites/\(siteId)/devices/\(deviceId)/statistics/latest"
             )
             let response = try JSONDecoder().decode(GatewayStatsResponse.self, from: data)
             return response.toGatewayStats
@@ -299,11 +414,12 @@ actor UniFiClient: UniFiClientProtocol {
 
     func fetchDDNSStatus() async -> (data: [DDNSStatusDTO]?, errorDetail: String?) {
         do {
-            let data = try await request("/proxy/network/api/s/default/rest/dynamicdns")
+            let reference = try await olderSiteReference()
+            let data = try await request("/proxy/network/api/s/\(reference)/rest/dynamicdns")
             guard let results = Self.decodeFlexibleArray(DDNSStatusDTO.self, from: data, endpoint: "ddns") else {
                 return (nil, "decode failed, \(data.count) bytes")
             }
-            return (results.isEmpty ? nil : Array(results.prefix(10)), nil)
+            return (results, nil)
         } catch {
             return (nil, Self.safeErrorDescription(error))
         }
@@ -313,12 +429,13 @@ actor UniFiClient: UniFiClientProtocol {
 
     func fetchPortForwards() async -> (data: [PortForwardDTO]?, errorDetail: String?) {
         do {
-            let data = try await request("/proxy/network/api/s/default/stat/portforward")
+            let reference = try await olderSiteReference()
+            let data = try await request("/proxy/network/api/s/\(reference)/stat/portforward")
             guard let results = Self.decodeFlexibleArray(PortForwardDTO.self, from: data, endpoint: "portforwards") else {
                 return (nil, "decode failed, \(data.count) bytes")
             }
             let active = results.filter { $0.enabled == true }
-            return (active.isEmpty ? nil : Array(active.prefix(50)), nil)
+            return (active, nil)
         } catch {
             return (nil, Self.safeErrorDescription(error))
         }
@@ -329,16 +446,14 @@ actor UniFiClient: UniFiClientProtocol {
     func fetchRogueAPs() async -> (data: [RogueAPDTO]?, errorDetail: String?) {
         do {
             let body: [String: Any] = ["within": 24]
-            let data = try await post("/proxy/network/api/s/default/stat/rogueap", body: body)
+            let reference = try await olderSiteReference()
+            let data = try await request("/proxy/network/api/s/\(reference)/stat/rogueap", body: body)
             guard let results = Self.decodeFlexibleArray(RogueAPDTO.self, from: data, endpoint: "rogueaps") else {
                 return (nil, "decode failed, \(data.count) bytes")
             }
-            guard !results.isEmpty else { return (nil, nil) }
             // Return top 10 by signal strength (prefer dBm signal, fall back to rssi)
             let sorted = results.sorted {
-                let lhs = $0.signal ?? ($0.rssi.map { $0 - 95 } ?? -200)
-                let rhs = $1.signal ?? ($1.rssi.map { $0 - 95 } ?? -200)
-                return lhs > rhs
+                ($0.signalDBm ?? -200) > ($1.signalDBm ?? -200)
             }
             return (Array(sorted.prefix(10)), nil)
         } catch {
@@ -348,13 +463,14 @@ actor UniFiClient: UniFiClientProtocol {
 
     // MARK: - Validation
 
-    /// Validates that an identifier is safe for URL path interpolation (alphanumeric, hyphens, colons).
+    /// Validates that an identifier is safe for URL path interpolation (alphanumeric, hyphens, underscores, colons).
     private static func isValidIdentifier(_ id: String) -> Bool {
-        !id.isEmpty && id.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == ":") }
+        !id.isEmpty && id.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" || $0 == ":") }
     }
 
     /// Returns a safe error description for logging (strips URLs and potential credential fragments).
     private static func safeErrorDescription(_ error: Error) -> String {
+        if let error = error as? CertificateConnectionError { return error.localizedDescription }
         if let unifiError = error as? UniFiError {
             switch unifiError {
             case .httpError(let code): return "HTTP \(code)"
@@ -362,6 +478,8 @@ actor UniFiClient: UniFiClientProtocol {
             case .selfNotFound: return "self not found"
             case .invalidURL: return "invalid URL"
             case .notConfigured: return "not configured"
+            case .incompleteResponse: return "incomplete or inconsistent collection"
+            case .ambiguousSite: return "multiple sites without a default"
             }
         }
         // For URLSession errors, only log the code/domain — not the full description which may contain URLs
@@ -371,6 +489,39 @@ actor UniFiClient: UniFiClientProtocol {
 
 }
 
+/// Custom API-key headers must never follow a redirect to another origin or HTTP.
+final class SameOriginRedirectDelegate: NSObject, URLSessionTaskDelegate {
+    private let certificateDelegate: PinnedCertDelegate?
+
+    init(certificateDelegate: PinnedCertDelegate? = nil) {
+        self.certificateDelegate = certificateDelegate
+    }
+
+    // A per-task delegate supplied to bytes(for:) owns authentication too; Foundation
+    // does not forward its default handling to the session's pinning delegate.
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    didReceive challenge: URLAuthenticationChallenge) async
+        -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+        guard let certificateDelegate else { return (.performDefaultHandling, nil) }
+        return await certificateDelegate.urlSession(session, didReceive: challenge)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest
+    ) async -> URLRequest? {
+        guard let original = task.originalRequest?.url, let target = request.url,
+              original.scheme?.lowercased() == "https", target.scheme?.lowercased() == "https",
+              let host = original.host, target.host?.lowercased() == host.lowercased(),
+              (original.port ?? 443) == (target.port ?? 443),
+              target.user == nil, target.password == nil
+        else { return nil }
+        return request
+    }
+}
+
 // MARK: - Certificate Pinning Delegate (Trust-On-First-Use)
 
 /// Pins the server certificate on first connection. Subsequent connections must present
@@ -378,13 +529,23 @@ actor UniFiClient: UniFiClientProtocol {
 /// is rejected and a specific error is surfaced so the user can intentionally reset the pin.
 final class PinnedCertDelegate: NSObject, URLSessionDelegate, Sendable {
     private let expectedHost: String
-    private let keychainKey: String
+    private let pinStore: CertificatePinStore
+    private let confirmCertificate: (@Sendable (CertificateDetails) async -> Bool)?
     private let state: OSAllocatedUnfairLock<PinState>
+
+    struct CertificateDetails: Sendable {
+        let host: String
+        let fingerprint: String
+    }
 
     enum PinState: Sendable {
         case unpinned
         case pinned(Data)
         case certChanged
+        case storageFailed
+        case awaitingApproval(Data, CertificateDetails)
+        case rejected(CertificateConnectionError)
+        case invalidated
     }
 
     /// Whether a certificate mismatch was detected (set after a failed handshake).
@@ -393,15 +554,41 @@ final class PinnedCertDelegate: NSObject, URLSessionDelegate, Sendable {
         state.withLock { if case .certChanged = $0 { return true }; return false }
     }
 
-    init(host: String) {
-        self.expectedHost = host
-        self.keychainKey = "com.unifbar.cert-pin.\(host)"
-        let existingPin = Self.loadPinFromKeychain(key: "com.unifbar.cert-pin.\(host)")
-        if let pin = existingPin {
-            self.state = OSAllocatedUnfairLock(initialState: .pinned(pin))
-        } else {
-            self.state = OSAllocatedUnfairLock(initialState: .unpinned)
+    var failure: CertificateConnectionError? {
+        state.withLock {
+            switch $0 {
+            case .certChanged: .changedKey
+            case .storageFailed: .pinStorageFailed
+            case .awaitingApproval: .nameMismatch
+            case .rejected(let reason): reason
+            default: nil
+            }
         }
+    }
+
+    init(host: String, pinStore: CertificatePinStore = .keychain,
+         confirmCertificate: (@Sendable (CertificateDetails) async -> Bool)? = nil) {
+        self.expectedHost = host
+        self.pinStore = pinStore
+        self.confirmCertificate = confirmCertificate
+        do {
+            let pin = try pinStore.load(host: host)
+            self.state = OSAllocatedUnfairLock(initialState: pin.map(PinState.pinned) ?? .unpinned)
+        } catch {
+            self.state = OSAllocatedUnfairLock(initialState: .storageFailed)
+        }
+    }
+
+    func resetPin() throws {
+        try state.withLock {
+            try pinStore.remove(host: expectedHost)
+            // The caller recreates the delegate; this old session must not silently re-pin.
+            $0 = .invalidated
+        }
+    }
+
+    func invalidate() {
+        state.withLock { $0 = .invalidated }
     }
 
     func urlSession(
@@ -419,88 +606,116 @@ final class PinnedCertDelegate: NSObject, URLSessionDelegate, Sendable {
         }
 
         guard let serverKeyHash = Self.publicKeyHash(from: serverTrust) else {
+            reject(.invalidCertificate)
             return (.cancelAuthenticationChallenge, nil)
         }
 
-        // Validate certificate hasn't expired and hostname matches.
-        // We allow self-signed roots (the whole point of this delegate) but reject expired certs.
-        guard Self.validateCertificate(serverTrust, for: expectedHost) else {
+        let nameMatches = Self.validateCertificate(serverTrust, for: expectedHost)
+        // A known public key or explicit first-use approval can identify a controller
+        // whose factory certificate names unifi.local instead of its LAN IP. Expiry,
+        // key usage and HTTPS suitability remain mandatory, even after approval.
+        guard nameMatches || Self.validateCertificate(serverTrust, for: nil) else {
+            reject(.invalidCertificate)
             return (.cancelAuthenticationChallenge, nil)
         }
 
-        let (decision, shouldPersist): ((URLSession.AuthChallengeDisposition, URLCredential?), Bool) = state.withLock { currentState in
+        let needsApproval = state.withLock { if case .unpinned = $0 { return !nameMatches }; return false }
+        if needsApproval {
+            guard let leaf = (SecTrustCopyCertificateChain(serverTrust) as? [SecCertificate])?.first
+            else {
+                reject(.invalidCertificate)
+                return (.cancelAuthenticationChallenge, nil)
+            }
+            let fingerprint = SHA256.hash(data: SecCertificateCopyData(leaf) as Data)
+                .map { String(format: "%02X", $0) }.joined(separator: ":")
+            state.withLock {
+                if case .unpinned = $0 {
+                    $0 = .awaitingApproval(serverKeyHash, CertificateDetails(host: expectedHost, fingerprint: fingerprint))
+                }
+            }
+            return (.cancelAuthenticationChallenge, nil)
+        }
+
+        return state.withLock { currentState in
             switch currentState {
             case .pinned(let storedHash):
-                if serverKeyHash == storedHash {
-                    return ((.useCredential, URLCredential(trust: serverTrust)), false)
-                } else {
-                    // Cert changed — could be renewal or MITM. Reject and flag it.
+                guard serverKeyHash == storedHash else {
                     currentState = .certChanged
-                    return ((.cancelAuthenticationChallenge, nil), false)
+                    return (.cancelAuthenticationChallenge, nil)
                 }
-
+                return (.useCredential, URLCredential(trust: serverTrust))
             case .unpinned:
-                currentState = .pinned(serverKeyHash)
-                return ((.useCredential, URLCredential(trust: serverTrust)), true)
-
-            case .certChanged:
-                return ((.cancelAuthenticationChallenge, nil), false)
+                do {
+                    // Persist under the lock before allowing any concurrent challenge.
+                    try pinStore.saveIfAbsent(serverKeyHash, host: expectedHost)
+                    currentState = .pinned(serverKeyHash)
+                    return (.useCredential, URLCredential(trust: serverTrust))
+                } catch CertificatePinStore.Failure.conflictingPin {
+                    currentState = .certChanged
+                } catch {
+                    currentState = .storageFailed
+                }
+                return (.cancelAuthenticationChallenge, nil)
+            case .certChanged, .storageFailed, .awaitingApproval, .rejected, .invalidated:
+                return (.cancelAuthenticationChallenge, nil)
             }
         }
-
-        if shouldPersist {
-            Self.savePinToKeychain(key: keychainKey, data: serverKeyHash)
-        }
-
-        return decision
     }
 
-    /// Validates certificate expiration and hostname while allowing self-signed roots.
-    private static func validateCertificate(_ trust: SecTrust, for host: String) -> Bool {
-        // Check leaf certificate validity dates directly — this reliably
-        // rejects expired certs regardless of chain trust status.
-        guard let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate],
-              let leaf = chain.first
-        else { return false }
-
-        guard Self.isLeafValid(leaf) else { return false }
-
-        // Now evaluate trust. Self-signed certs will fail (errSecNotTrusted)
-        // which we allow, but any other failure (e.g. hostname mismatch) is rejected.
-        let policy = SecPolicyCreateSSL(true, host as CFString)
-        SecTrustSetPolicies(trust, policy)
-        var error: CFError?
-        let valid = SecTrustEvaluateWithError(trust, &error)
-        if !valid, let error, CFErrorGetCode(error) != errSecNotTrusted {
+    /// Called after the rejected request ends, so network timeouts cannot expire a prompt.
+    func approvePendingCertificate() async -> Bool {
+        guard !Task.isCancelled, let confirmCertificate,
+              case .awaitingApproval(let hash, let details) = state.withLock({ $0 }) else { return false }
+        guard await confirmCertificate(details), !Task.isCancelled else {
+            reject(.nameMismatch)
             return false
         }
-        return true
+        // Reset/invalidation and a competing pin always win over a stale approval.
+        return state.withLock {
+            guard case .awaitingApproval(let pendingHash, _) = $0, pendingHash == hash else { return false }
+            do {
+                try pinStore.saveIfAbsent(hash, host: expectedHost)
+                $0 = .pinned(hash)
+                return true
+            } catch CertificatePinStore.Failure.conflictingPin {
+                $0 = .certChanged
+            } catch {
+                $0 = .storageFailed
+            }
+            return false
+        }
     }
 
-    /// Checks that the leaf certificate is within its validity period (not expired, not not-yet-valid).
-    /// Uses Apple's official X.509 validity OIDs via SecCertificateCopyValues.
-    /// Falls back to SecCertificateCopyNotValidAfterDate (macOS 13+) if the values dict
-    /// doesn't contain the expected keys. Returns true only if validation can't be performed.
-    private static func isLeafValid(_ cert: SecCertificate) -> Bool {
-        let now = Date()
-        let keys: [CFString] = [kSecOIDX509V1ValidityNotBefore, kSecOIDX509V1ValidityNotAfter]
-        if let values = SecCertificateCopyValues(cert, keys as CFArray, nil) as? [CFString: Any] {
-            if let notBefore = values[kSecOIDX509V1ValidityNotBefore] as? [CFString: Any],
-               let date = notBefore[kSecPropertyKeyValue] as? Date,
-               now < date { return false }
-            if let notAfter = values[kSecOIDX509V1ValidityNotAfter] as? [CFString: Any],
-               let date = notAfter[kSecPropertyKeyValue] as? Date,
-               now > date { return false }
-            return true
+    private func reject(_ reason: CertificateConnectionError) {
+        state.withLock {
+            switch $0 {
+            case .unpinned, .pinned, .awaitingApproval: $0 = .rejected(reason)
+            default: break // Preserve pin/storage failures and invalidation.
+            }
         }
+    }
 
-        // Fallback: use SecCertificateCopyNotValidAfterDate (macOS 13+) for notAfter
-        if let notAfter = SecCertificateCopyNotValidAfterDate(cert) {
-            return now <= (notAfter as Date)
-        }
+    /// Trust only this leaf for this evaluation. A nil name still enforces SSL validity.
+    private static func validateCertificate(_ trust: SecTrust, for host: String?) -> Bool {
+        guard let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate],
+              let leaf = chain.first,
+              let notBefore = SecCertificateCopyNotValidBeforeDate(leaf),
+              let notAfter = SecCertificateCopyNotValidAfterDate(leaf)
+        else { return false }
+        let date = verificationDate(for: SecTrustGetVerifyTime(trust))
+        guard (notBefore as Date) <= date, date <= (notAfter as Date) else { return false }
 
-        // Can't inspect the cert — let SecTrustEvaluateWithError decide
-        return true
+        // No system trust changes: anchors belong to this SecTrust object only.
+        guard SecTrustSetPolicies(trust, SecPolicyCreateSSL(true, host.map { $0 as CFString })) == errSecSuccess,
+              SecTrustSetAnchorCertificates(trust, [leaf] as CFArray) == errSecSuccess,
+              SecTrustSetAnchorCertificatesOnly(trust, true) == errSecSuccess
+        else { return false }
+        return SecTrustEvaluateWithError(trust, nil)
+    }
+
+    static func verificationDate(for time: CFAbsoluteTime) -> Date {
+        // SecTrustGetVerifyTime documents zero as an implicit current verification time.
+        time == 0 ? Date() : Date(timeIntervalSinceReferenceDate: time)
     }
 
     /// Extracts SHA-256 hash of the public key from a server trust.
@@ -516,48 +731,4 @@ final class PinnedCertDelegate: NSObject, URLSessionDelegate, Sendable {
         return Data(digest)
     }
 
-    // MARK: - Keychain storage for certificate pins
-
-    private static func loadPinFromKeychain(key: String) -> Data? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "com.unifbar.cert-pins",
-            kSecAttrAccount as String: key,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let data = result as? Data else { return nil }
-        return data
-    }
-
-    private static func savePinToKeychain(key: String, data: Data) {
-        // Delete any existing item first to ensure kSecAttrAccessible is always set correctly
-        // (SecItemUpdate cannot change the accessibility attribute of existing items)
-        let deleteQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "com.unifbar.cert-pins",
-            kSecAttrAccount as String: key,
-        ]
-        SecItemDelete(deleteQuery as CFDictionary)
-
-        let addQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "com.unifbar.cert-pins",
-            kSecAttrAccount as String: key,
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-        ]
-        SecItemAdd(addQuery as CFDictionary, nil)
-    }
-
-    static func deletePinFromKeychain(host: String) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "com.unifbar.cert-pins",
-            kSecAttrAccount as String: "com.unifbar.cert-pin.\(host)",
-        ]
-        SecItemDelete(query as CFDictionary)
-    }
 }

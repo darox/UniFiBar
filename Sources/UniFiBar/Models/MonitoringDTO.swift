@@ -115,19 +115,16 @@ struct RogueAPDTO: Decodable, Sendable, Identifiable {
         case apMac = "ap_mac"
     }
 
-    var signalDescription: String {
-        // Prefer the 'signal' field (already in dBm, negative).
-        // Fall back to converting rssi: dBm = rssi - 95.
-        let dBm: Int
+    var signalDBm: Int? {
         if let signal {
-            dBm = signal
-        } else if let rssi {
-            dBm = rssi - 95
-        } else {
-            return "—"
+            return max(-120, min(0, signal))
         }
-        let clamped = max(-120, min(0, dBm))
-        return "\(clamped) dBm"
+        // Clamp before subtracting so malformed RSSI cannot overflow.
+        return rssi.map { min(max($0, -25), 95) - 95 }
+    }
+
+    var signalDescription: String {
+        signalDBm.map { "\($0) dBm" } ?? "—"
     }
 
     var displayName: String {

@@ -19,16 +19,12 @@ struct DeviceDTO: Decodable, Sendable {
     /// Gateway models: UCG Fiber, UDM, UDM Pro, UDR, UXG, etc.
     /// Also matches devices with gateway-like features (wan role, routing capability).
     var isGateway: Bool {
+        if features?.contains(where: { $0 == "gateway" || $0 == "wan" }) == true { return true }
         guard let model = model?.lowercased() else { return false }
         return model.contains("ucg") || model.contains("udm") || model.contains("udr")
             || model.contains("uxg") || model.contains("gateway") || model.contains("dream")
             || model.contains("router") || model.contains("usg")
-            || features?.contains("wan") == true
     }
-}
-
-struct DeviceListResponse: Decodable, Sendable {
-    let data: [DeviceDTO]
 }
 
 // MARK: - WAN Health (from legacy /stat/health endpoint)
@@ -47,6 +43,10 @@ struct WANHealth: Sendable {
 
 struct WANHealthResponse: Decodable, Sendable {
     let data: [HealthEntry]
+
+    init(from decoder: Decoder) throws {
+        data = try UniFiClient.LegacyResponse<HealthEntry>(from: decoder).data ?? []
+    }
 
     struct HealthEntry: Decodable, Sendable {
         let subsystem: String?
@@ -132,27 +132,31 @@ struct WANHealthResponse: Decodable, Sendable {
 
 // MARK: - VPN Tunnels
 
-struct VPNTunnelResponse: Decodable, Sendable {
-    let data: [VPNTunnelDTO]
-}
-
 struct VPNTunnelDTO: Decodable, Sendable, Identifiable {
+    let officialId: String?
     private let _id: String?
     let name: String?
     let status: String?
     let remoteNetworkCidr: String?
     let type: String?
 
-    var id: String { _id ?? name ?? stableFallback }
+    var id: String { officialId ?? _id ?? name ?? stableFallback }
 
     /// Deterministic fallback so SwiftUI identity is stable across view updates.
     private var stableFallback: String {
         let fields = [_id, name, status, remoteNetworkCidr, type].compactMap { $0 }
         return fields.isEmpty ? "unknown-tunnel" : fields.joined(separator: ":")
     }
-    var isConnected: Bool { status == "CONNECTED" || status == "UP" }
+    var isConnected: Bool? {
+        switch status {
+        case "CONNECTED", "UP": true
+        case "DISCONNECTED", "DOWN": false
+        default: nil
+        }
+    }
 
     init(_id: String? = nil, name: String? = nil, status: String? = nil, remoteNetworkCidr: String? = nil, type: String? = nil) {
+        self.officialId = nil
         self._id = _id
         self.name = name
         self.status = status
@@ -161,6 +165,7 @@ struct VPNTunnelDTO: Decodable, Sendable, Identifiable {
     }
 
     enum CodingKeys: String, CodingKey {
+        case officialId = "id"
         case _id
         case name, status
         case remoteNetworkCidr = "remote_network_cidr"

@@ -5,6 +5,93 @@ import Testing
 @MainActor
 struct WiFiStatusTests {
 
+    @Test func supplementalRefreshClearsOldMetricsAndDistinguishesEmptyFromFailure() {
+        let status = WiFiStatus()
+        status.wanISP = "old-isp"
+        status.gatewayName = "old-gateway"
+        status.apCPU = 50
+        status.totalDevices = 3
+        status.beginSupplementalRefresh()
+        #expect(status.wanISP == nil && status.gatewayName == nil && status.apCPU == nil)
+        #expect(status.totalDevices == nil)
+        #expect(status.dataAvailability.values.allSatisfy { $0 == .refreshing })
+        status.updateDevices([])
+        status.updateVPN([])
+        status.updateSessions([], devices: [])
+        status.updateMonitoring(ddns: [], portForwards: nil, rogueAPs: [])
+        #expect(status.dataAvailability[.devices] == .empty)
+        #expect(status.dataAvailability[.vpn] == .empty)
+        #expect(status.dataAvailability[.sessions] == .empty)
+        #expect(status.dataAvailability[.ddns] == .empty)
+        #expect(status.dataAvailability[.portForwards] == .unavailable)
+        status.updateDevices(nil)
+        #expect(status.dataAvailability[.devices] == .unavailable)
+        #expect(status.totalDevices == nil)
+        status.clearState()
+        #expect(status.dataAvailability.isEmpty)
+    }
+
+    @Test func officialGatewayFeatureDoesNotRequireAModelName() throws {
+        let gateway = try JSONDecoder().decode(DeviceDTO.self, from: Data(#"{"features":["gateway"]}"#.utf8))
+        #expect(gateway.isGateway)
+    }
+
+    @Test func testInvalidMetricsAreDiscardedBeforeArithmetic() throws {
+        let status = WiFiStatus()
+        let extreme = V2ClientDTO(ip: "192.0.2.1", signal: .max, wifiExperienceScore: .max)
+        status.update(from: SelfInfo(client: extreme, totalClients: 1, clientsOnSameAP: 1))
+        // Require safe state before exercising a second update (old subtraction could trap).
+        try #require(status.signal == nil)
+        try #require(status.satisfaction == nil)
+        let next = V2ClientDTO(ip: "192.0.2.1", signal: .min, wifiExperienceScore: .min)
+        status.update(from: SelfInfo(client: next, totalClients: 1, clientsOnSameAP: 1))
+        #expect(status.signal == nil)
+        #expect(status.satisfaction == nil)
+        #expect(status.signalTrend == .stable)
+        #expect(status.satisfactionTrend == .stable)
+    }
+
+    @Test func testInvalidLoadsAreDiscardedBeforeIntegerConversion() throws {
+        let status = WiFiStatus()
+        status.updateAPStats(APStats(uptimeSec: nil, cpuUtilizationPct: 1e300, memoryUtilizationPct: -1))
+        status.updateGateway(GatewayStats(uptimeSec: nil, cpuUtilizationPct: -1, memoryUtilizationPct: 1e300,
+                                         uplinkTxRateBps: nil, uplinkRxRateBps: nil), device: nil)
+        try #require(status.apCPU == nil && status.apMemory == nil)
+        try #require(status.gatewayCPU == nil && status.gatewayMemory == nil)
+        #expect(status.formattedAPLoad == nil)
+        #expect(status.formattedGatewayLoad == nil)
+    }
+
+    @Test func testSessionDurationsRejectNegativeAndOverflow() throws {
+        let status = WiFiStatus()
+        status.updateSessions([SessionDTO(mac: nil, apMac: "aa", duration: -1, assocTime: nil)], devices: [])
+        try #require(status.sessions?.isEmpty == true)
+        status.updateSessions([
+            SessionDTO(mac: nil, apMac: "aa", duration: .max, assocTime: nil),
+            SessionDTO(mac: nil, apMac: "aa", duration: 1, assocTime: nil)
+        ], devices: [])
+        #expect(status.sessions?.first?.duration == Int.max)
+        #expect(status.sessions?.first?.fraction == 1)
+    }
+
+    @Test func testSessionLookupKeepsFirstDeviceAndStableIdentity() {
+        let status = WiFiStatus()
+        let dtos = [SessionDTO(mac: nil, apMac: "AA:BB", duration: 60, assocTime: nil)]
+        let devices = [device(id: "first", mac: "aa:bb", name: "First AP", state: "ONLINE"),
+                       device(id: "second", mac: "AA:BB", name: "Duplicate AP", state: "ONLINE")]
+        status.updateSessions(dtos, devices: devices)
+        let firstID = status.sessions?.first?.id
+        #expect(status.sessions?.first?.apName == "First AP")
+        status.updateSessions(dtos, devices: devices)
+        #expect(status.sessions?.first?.id == firstID)
+    }
+
+    @Test(arguments: [(Int.min, "-120 dBm"), (-25, "-120 dBm"), (0, "-95 dBm"), (95, "0 dBm"), (Int.max, "0 dBm")])
+    func testExtremeRogueRSSI(rssi: Int, expected: String) throws {
+        let ap = try JSONDecoder().decode(RogueAPDTO.self, from: Data("{\"rssi\":\(rssi)}".utf8))
+        #expect(ap.signalDescription == expected)
+    }
+
     // MARK: - Quality Label
 
     @Test func testQualityLabel() {
@@ -419,8 +506,9 @@ struct WiFiStatusTests {
 
         status.updateDevices([])
 
-        #expect(status.totalDevices == nil)
-        #expect(status.onlineDevices == nil)
+        #expect(status.totalDevices == 0)
+        #expect(status.onlineDevices == 0)
+        #expect(status.dataAvailability[.devices] == .empty)
         #expect(status.offlineDeviceNames == nil)
         #expect(status.devicesWithUpdates == nil)
     }

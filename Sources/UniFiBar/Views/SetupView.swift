@@ -2,6 +2,9 @@ import SwiftUI
 
 struct SetupView: View {
     let controller: StatusBarController
+    var makeClient: @MainActor (URL, String, Bool) -> any UniFiClientProtocol = {
+        UniFiClient(baseURL: $0, apiKey: $1, allowSelfSigned: $2, confirmCertificate: confirmControllerCertificate)
+    }
     @Environment(\.dismiss) private var dismiss
 
     @State private var controllerURL = ""
@@ -12,6 +15,7 @@ struct SetupView: View {
     @State private var failedAttempts = 0
     @State private var retryAvailableAt: Date?
     @State private var retryTask: Task<Void, Never>?
+    @State private var connectionTask: Task<Void, Never>?
 
     var body: some View {
         VStack(spacing: 24) {
@@ -22,7 +26,11 @@ struct SetupView: View {
         }
         .padding(24)
         .frame(width: 420, height: 480)
-        .onDisappear { retryTask?.cancel() }
+        .onDisappear {
+            connectionTask?.cancel()
+            retryTask?.cancel()
+            isValidating = false
+        }
     }
 
     private var header: some View {
@@ -56,7 +64,7 @@ struct SetupView: View {
 
     @ViewBuilder
     private var errorMessageView: some View {
-        if let errorMessage {
+        if let errorMessage = errorMessage ?? controller.preferences.credentialError {
             Text(errorMessage)
                 .font(.caption)
                 .foregroundStyle(.red)
@@ -66,6 +74,7 @@ struct SetupView: View {
     private var actionButtons: some View {
         HStack {
             Button("Cancel") {
+                connectionTask?.cancel()
                 dismiss()
             }
             .keyboardShortcut(.cancelAction)
@@ -73,10 +82,11 @@ struct SetupView: View {
             Spacer()
 
             Button("Connect") {
-                Task { await validate() }
+                connectionTask?.cancel()
+                connectionTask = Task { await validate() }
             }
             .buttonStyle(.borderedProminent)
-            .disabled(controllerURL.isEmpty || apiKey.isEmpty || isValidating || isRateLimited)
+            .disabled(controllerURL.isEmpty || apiKey.isEmpty || isValidating || isRateLimited || controller.preferences.isResetting)
             .keyboardShortcut(.defaultAction)
         }
     }
@@ -87,6 +97,7 @@ struct SetupView: View {
     }
 
     private func validate() async {
+        guard !Task.isCancelled else { return }
         isValidating = true
         errorMessage = nil
 
@@ -99,29 +110,19 @@ struct SetupView: View {
         case .failure(let error):
             errorMessage = error.errorDescription
         }
-        isValidating = false
+        if !Task.isCancelled { isValidating = false }
     }
 
     private func connectWith(url: URL, apiKey: String) async {
-        let urlString = url.absoluteString
-
-        let testClient = UniFiClient(
-            baseURL: url,
-            apiKey: apiKey,
-            allowSelfSigned: allowSelfSigned
-        )
+        let testClient = makeClient(url, apiKey, allowSelfSigned)
 
         do {
-            let siteId = try await testClient.fetchSiteId()
-            try await controller.preferences.save(
-                controllerURL: urlString,
-                apiKey: apiKey,
-                allowSelfSigned: allowSelfSigned
-            )
-            controller.preferences.siteId = siteId
+            try await controller.connect(using: testClient, url: url, apiKey: apiKey, allowSelfSigned: allowSelfSigned)
+            try Task.checkCancellation()
             failedAttempts = 0
-            await controller.reconfigure()
             dismiss()
+        } catch is CancellationError {
+            return
         } catch let error as UniFiError {
             switch error {
             case .httpError(let code) where code == 401 || code == 403:
@@ -133,7 +134,7 @@ struct SetupView: View {
                     retryAvailableAt = Date().addingTimeInterval(delay)
                     errorMessage = "Too many failed attempts. Wait \(Int(delay))s before retrying."
                     retryTask = Task {
-                        try? await Task.sleep(for: .seconds(delay))
+                        do { try await Task.sleep(for: .seconds(delay)) } catch { return }
                         retryAvailableAt = nil
                     }
                 }
@@ -142,10 +143,14 @@ struct SetupView: View {
             case .noSitesFound:
                 errorMessage = "Connected, but no sites found on this controller."
             default:
-                errorMessage = "Could not connect. Check your URL and certificate settings."
+                errorMessage = error.errorDescription
             }
+        } catch let error as CertificateConnectionError {
+            errorMessage = error.errorDescription
         } catch is URLError {
             errorMessage = "Could not reach the controller. Check the URL and your network connection."
+        } catch let error as KeychainError {
+            errorMessage = error.errorDescription
         } catch {
             errorMessage = "Connection failed. Check your URL and network settings."
         }

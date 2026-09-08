@@ -5,7 +5,7 @@ struct NearbyAPsSection: View {
 
     var body: some View {
         CollapsibleSectionWithBadge(
-            title: "Nearby APs",
+            title: "Nearby APs (top 10)",
             badge: rogueAPs.count,
             badgeColor: .secondary,
             defaultExpanded: false

@@ -16,6 +16,7 @@ for script in Scripts/*.sh; do
 done
 shellcheck -x -P SCRIPTDIR Scripts/*.sh
 python3 Tests/test_build_bundle.py
+python3 Tests/test_probe_endpoints.py
 git diff --check
 git diff --cached --check
 

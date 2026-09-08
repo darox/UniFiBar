@@ -3,6 +3,15 @@ import SwiftUI
 
 struct PreferencesView: View {
     let controller: StatusBarController
+    var makeClient: @MainActor (URL, String, Bool) -> any UniFiClientProtocol = {
+        UniFiClient(baseURL: $0, apiKey: $1, allowSelfSigned: $2, confirmCertificate: confirmControllerCertificate)
+    }
+    var loginItemIsEnabled: @MainActor () -> Bool = { SMAppService.mainApp.status == .enabled }
+    var setLoginItemEnabled: @MainActor (Bool) throws -> Void = { enabled in
+        if enabled { try SMAppService.mainApp.register() }
+        else { try SMAppService.mainApp.unregister() }
+    }
+    var copyReport: @MainActor (String) -> Void = DiagnosticsLog.copyToClipboard
 
     @Environment(\.dismiss) private var dismiss
 
@@ -13,9 +22,9 @@ struct PreferencesView: View {
     @State private var compactMode = false
     @State private var pollInterval: Int = 30
     @State private var launchAtLogin = false
-    @State private var launchAtLoginInitialized = false
     @State private var isLoading = true
     @State private var isSaving = false
+    @State private var connectionTask: Task<Void, Never>?
     @State private var showResetConfirmation = false
     @State private var errorMessage: String?
 
@@ -30,17 +39,24 @@ struct PreferencesView: View {
                     siteSection
                     behaviorSection
                     visibilitySection
-                    DiagnosticsSection(controller: controller)
+                    DiagnosticsSection(controller: controller, copyReport: copyReport)
                     resetSection
                 }
                 .formStyle(.grouped)
+                .disabled(controller.preferences.isResetting)
             }
         }
         .frame(width: 480)
         .task { await loadExisting() }
+        .onDisappear {
+            connectionTask?.cancel()
+            isSaving = false
+        }
         .confirmationDialog("Reset UniFiBar?", isPresented: $showResetConfirmation) {
             Button("Reset & Forget", role: .destructive) {
-                Task { await reset() }
+                connectionTask?.cancel()
+                let cleanup = controller.resetConfiguration()
+                Task { await reset(cleanup) }
             }
         } message: {
             Text("This will remove all saved credentials and settings. You will need to set up again.")
@@ -61,7 +77,8 @@ struct PreferencesView: View {
                     }
                     Spacer()
                     Button("Update") {
-                        Task { await save() }
+                        connectionTask?.cancel()
+                        connectionTask = Task { await save() }
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(controllerURL.isEmpty || apiKey.isEmpty || isSaving)
@@ -92,7 +109,7 @@ struct PreferencesView: View {
         } header: {
             Text("Connection")
         } footer: {
-            if let errorMessage {
+            if let errorMessage = errorMessage ?? controller.preferences.credentialError {
                 Text(errorMessage)
                     .foregroundStyle(.red)
             }
@@ -131,11 +148,7 @@ struct PreferencesView: View {
                 controller.preferences.setPollInterval(newValue)
                 controller.restartPolling()
             }
-            Toggle("Launch at login", isOn: $launchAtLogin)
-                .onChange(of: launchAtLogin) { _, newValue in
-                    guard launchAtLoginInitialized else { return }
-                    setLaunchAtLogin(newValue)
-                }
+            Toggle("Launch at login", isOn: Binding(get: { launchAtLogin }, set: setLaunchAtLogin))
         } header: {
             Text("Behavior")
         }
@@ -171,17 +184,20 @@ struct PreferencesView: View {
 
     private func loadExisting() async {
         await controller.preferences.checkConfiguration()
+        guard !Task.isCancelled else { return }
         controllerURL = controller.preferences.cachedURL ?? ""
         apiKey = controller.preferences.cachedAPIKey ?? ""
         allowSelfSigned = controller.preferences.allowSelfSignedCerts
         compactMode = controller.preferences.compactMode
         pollInterval = controller.preferences.pollIntervalSeconds
-        launchAtLogin = SMAppService.mainApp.status == .enabled
-        launchAtLoginInitialized = true
+        launchAtLogin = loginItemIsEnabled()
         isLoading = false
+        isEditingCredentials = !controller.preferences.isConfigured
     }
 
     private func revertCredentials() {
+        connectionTask?.cancel()
+        isSaving = false
         controllerURL = controller.preferences.cachedURL ?? ""
         apiKey = controller.preferences.cachedAPIKey ?? ""
         allowSelfSigned = controller.preferences.allowSelfSignedCerts
@@ -190,9 +206,10 @@ struct PreferencesView: View {
     }
 
     private func save() async {
+        guard !Task.isCancelled else { return }
         errorMessage = nil
         isSaving = true
-        defer { isSaving = false }
+        defer { if !Task.isCancelled { isSaving = false } }
 
         let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -204,24 +221,14 @@ struct PreferencesView: View {
             return
         }
 
-        let urlString = url.absoluteString
-
-        let testClient = UniFiClient(
-            baseURL: url,
-            apiKey: trimmedKey,
-            allowSelfSigned: allowSelfSigned
-        )
+        let testClient = makeClient(url, trimmedKey, allowSelfSigned)
 
         do {
-            let siteId = try await testClient.fetchSiteId()
-            try await controller.preferences.save(
-                controllerURL: urlString,
-                apiKey: trimmedKey,
-                allowSelfSigned: allowSelfSigned
-            )
-            controller.preferences.siteId = siteId
-            await controller.reconfigure()
+            try await controller.connect(using: testClient, url: url, apiKey: trimmedKey, allowSelfSigned: allowSelfSigned)
+            try Task.checkCancellation()
             isEditingCredentials = false
+        } catch is CancellationError {
+            return
         } catch let error as UniFiError {
             switch error {
             case .httpError(let code) where code == 401 || code == 403:
@@ -231,42 +238,52 @@ struct PreferencesView: View {
             case .noSitesFound:
                 errorMessage = "Connected, but no sites found on this controller."
             default:
-                errorMessage = "Could not connect. Check your URL and certificate settings."
+                errorMessage = error.errorDescription
             }
+        } catch let error as CertificateConnectionError {
+            errorMessage = error.errorDescription
         } catch is URLError {
             errorMessage = "Could not reach the controller. Check the URL and your network connection."
+        } catch let error as KeychainError {
+            errorMessage = error.errorDescription
         } catch {
             errorMessage = "Connection failed. Check your URL and network settings."
         }
     }
 
-    private func reset() async {
-        await controller.preferences.resetAll()
-        controller.resetState()
-        dismiss()
+    private func reset(_ cleanup: Task<Void, Error>) async {
+        do {
+            try await cleanup.value
+            dismiss()
+        } catch {
+            controllerURL = ""
+            apiKey = ""
+            allowSelfSigned = false
+            isSaving = false
+            isEditingCredentials = true
+            errorMessage = controller.preferences.credentialError
+        }
     }
 
     private func setLaunchAtLogin(_ enabled: Bool) {
+        // Only the control's binding invokes operations; loading/rollback just update state.
+        launchAtLogin = enabled
         do {
-            if enabled {
-                try SMAppService.mainApp.register()
-            } else {
-                try SMAppService.mainApp.unregister()
-            }
+            try setLoginItemEnabled(enabled)
         } catch {
-            launchAtLoginInitialized = false
-            launchAtLogin = SMAppService.mainApp.status == .enabled
-            launchAtLoginInitialized = true
+            launchAtLogin = loginItemIsEnabled()
         }
     }
 }
 
 // MARK: - Diagnostics Section
 
-private struct DiagnosticsSection: View {
+struct DiagnosticsSection: View {
     let controller: StatusBarController
+    var copyReport: @MainActor (String) -> Void = DiagnosticsLog.copyToClipboard
 
     @State private var versionTapCount = 0
+    @State private var includePrivateDetails = false
 
     var body: some View {
         Section {
@@ -312,6 +329,7 @@ private struct DiagnosticsSection: View {
                 .toggleStyle(.switch)
                 .controlSize(.small)
                 .labelsHidden()
+                .accessibilityLabel("Debug Mode")
             }
 
             if !events.isEmpty {
@@ -341,6 +359,12 @@ private struct DiagnosticsSection: View {
                 }
             }
 
+            Toggle("Include private details in copied report", isOn: $includePrivateDetails)
+                .accessibilityLabel("Include private details in copied report")
+            Text("Includes network identifiers and raw events, which may contain secrets. Review before sharing.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
             HStack {
                 Button("Copy Report") {
                     let report = log.exportText(
@@ -349,10 +373,11 @@ private struct DiagnosticsSection: View {
                         pollInterval: controller.currentPollInterval,
                         controllerHost: controller.preferences.controllerURL?.host,
                         allowSelfSignedCerts: controller.preferences.allowSelfSignedCerts,
-                        wifiStatus: controller.wifiStatus
+                        wifiStatus: controller.wifiStatus,
+                        includePrivateDetails: includePrivateDetails
                     )
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(report, forType: .string)
+                    copyReport(report)
+                    includePrivateDetails = false
                 }
                 Spacer()
                 Button("Clear Log") {

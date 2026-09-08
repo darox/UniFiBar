@@ -3,7 +3,6 @@ import SwiftUI
 struct CollapsibleSection<Content: View>: View {
     let title: String
     let showDivider: Bool
-    let defaultExpanded: Bool
     @ViewBuilder let content: () -> Content
 
     @State private var isExpanded: Bool
@@ -11,7 +10,6 @@ struct CollapsibleSection<Content: View>: View {
     init(title: String, showDivider: Bool = true, defaultExpanded: Bool = true, @ViewBuilder content: @escaping () -> Content) {
         self.title = title
         self.showDivider = showDivider
-        self.defaultExpanded = defaultExpanded
         self.content = content
         self._isExpanded = State(initialValue: defaultExpanded)
     }
@@ -66,7 +64,6 @@ struct CollapsibleSectionWithBadge<Content: View>: View {
     let badge: Int
     let badgeColor: Color
     let showDivider: Bool
-    let defaultExpanded: Bool
     @ViewBuilder let content: () -> Content
 
     @State private var isExpanded: Bool
@@ -76,7 +73,6 @@ struct CollapsibleSectionWithBadge<Content: View>: View {
         self.badge = badge
         self.badgeColor = badgeColor
         self.showDivider = showDivider
-        self.defaultExpanded = defaultExpanded
         self.content = content
         self._isExpanded = State(initialValue: defaultExpanded)
     }

@@ -245,7 +245,10 @@ func uiCheck(id: UUID, output: URL) async throws {
     }
     try await checkForm(preferences, button: "Update", name: "preferences")
     preferences.window?.close()
-    let setup = try await host(SetupView(controller: controller, makeClient: rejectClient), width: 420, name: "setup-form")
+    // Opaque backing matches the real window; without it the offscreen capture
+    // cannot composite the Liquid Glass button material (labels vanish).
+    let setup = try await host(SetupView(controller: controller, makeClient: rejectClient)
+        .background(Color(nsColor: .windowBackgroundColor)), width: 420, name: "setup-form")
     try await checkForm(setup, button: "Connect", name: "setup-form")
     try require(fakeLogin.writes == [false, true], "later form rendering cannot repeat login-item actions")
     try require(controller.pollTask == nil && !controller.hasSystemObservers, "fixture never starts polling/observers")

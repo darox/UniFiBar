@@ -9,7 +9,7 @@
 Monitor WiFi signal strength, latency, throughput, roaming, and network health — all from your menu bar. Built for Ubiquiti UniFi users who want instant visibility into their wireless connection.
 
 [![Swift 6](https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white)](https://swift.org)
-[![macOS 26+](https://img.shields.io/badge/macOS-26_%28Tahoe%29-000000?logo=apple&logoColor=white)](https://developer.apple.com/macos/)
+[![macOS 26–27](https://img.shields.io/badge/macOS-26_%7C_27-000000?logo=apple&logoColor=white)](https://developer.apple.com/macos/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 <img src="docs/screenshot.png" width="420" alt="UniFiBar screenshot showing WiFi experience, signal strength, access point details, WAN latency, and network overview in the macOS menu bar" />
@@ -42,8 +42,8 @@ Tested with **Ubiquiti UniFi** network equipment:
 
 ## Requirements
 
-- macOS 26 (Tahoe)
-- Xcode 26+ command line tools
+- macOS 26 (Tahoe) or macOS 27 (Golden Gate)
+- Xcode 26 or 27 command line tools (Swift 6.2+)
 - A UniFi API key (Settings → Integrations → Generate API Key)
 
 ## Build & Install
@@ -110,7 +110,7 @@ required; see [development checks](docs/development.md).
 ## Tech Stack
 
 - **Swift 6** with strict concurrency
-- **SwiftUI** with Liquid Glass materials (macOS 26)
+- **SwiftUI** with Liquid Glass materials (macOS 26 and 27)
 - **SwiftPM** — no Xcode project required
 - **async/await** with actor isolation for thread safety
 

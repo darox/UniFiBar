@@ -25,7 +25,7 @@ if [ "${1:-}" = --portable ]; then
     exit 0
 fi
 if [ "$(uname -s)" != Darwin ]; then
-    echo "BLOCKED: full checks need macOS 26 and Xcode 26 (Swift 6.2+)." >&2
+    echo "BLOCKED: full checks need macOS 26 or later and Xcode 26 or later (Swift 6.2+)." >&2
     exit 2
 fi
 

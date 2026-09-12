@@ -2,10 +2,13 @@
 
 ## Setup and worktrees
 
-Full checks need macOS 26, Xcode 26 with Swift 6.2 or later, Python 3, and
-ShellCheck. Check the selected tools with `xcode-select -p`,
+Full checks need macOS 26 or 27, Xcode 26 or 27 with Swift 6.2 or later,
+Python 3, and ShellCheck. Check the selected tools with `xcode-select -p`,
 `xcrun --show-sdk-version`, and `swift --version`.
 Install ShellCheck with `brew install shellcheck` if it is absent.
+Xcode 26 ships the macOS 26 SDK, so keep to APIs that exist there: macOS 27
+additions such as `.textFieldStyle(.bordered)` fail to build with Xcode 26 and
+belong behind a compiler or availability gate when they are worth adopting.
 
 Run commands from the repository root. For separate work:
 

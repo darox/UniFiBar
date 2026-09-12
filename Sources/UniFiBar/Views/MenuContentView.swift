@@ -221,7 +221,7 @@ struct MenuContentView: View {
     // MARK: - Actions
 
     private func activateAndOpenWindow(_ id: String) {
-        NSApplication.shared.activate(ignoringOtherApps: true)
+        NSApplication.shared.activate()
         openWindow(id: id)
     }
 
@@ -339,20 +339,23 @@ private struct MenuFooterView: View {
                     .frame(maxWidth: .infinity)
             }
             .accessibilityLabel("Refresh")
+            .help("Refresh now")
 
             Button(action: onPreferences) {
                 Image(systemName: "gearshape")
                     .frame(maxWidth: .infinity)
             }
             .accessibilityLabel("Preferences")
+            .help("Open Preferences")
 
             Button {
                 NSApplication.shared.terminate(nil)
             } label: {
-                Image(systemName: "xmark")
+                Image(systemName: "power")
                     .frame(maxWidth: .infinity)
             }
             .accessibilityLabel("Quit")
+            .help("Quit UniFiBar")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 2)

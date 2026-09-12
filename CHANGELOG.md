@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- macOS 27 (Golden Gate) support: verified build, tests and release bundle on the macOS 27 SDK with Xcode 27. The deployment target stays macOS 26, so Tahoe users keep working.
+
+### Changed
+- Opening Setup/Preferences uses `NSApp.activate()`, the documented replacement for the soft-deprecated `activate(ignoringOtherApps:)`.
+- Menu footer buttons carry help tags, and Quit uses a power symbol instead of a close symbol. (macOS 27 hides menu item symbol images by default; UniFiBar presents a window-style menu bar extra, so it is unaffected.)
+- Requirements and checks now cover macOS 26 or 27 with Xcode 26 or 27.
+
 ## [1.0.0] — 2026-05-09
 
 ### Added

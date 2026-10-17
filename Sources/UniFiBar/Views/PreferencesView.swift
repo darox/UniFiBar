@@ -145,7 +145,12 @@ struct PreferencesView: View {
                 controller.preferences.setPollInterval(newValue)
                 controller.restartPolling()
             }
-            Toggle("Launch at login", isOn: Binding(get: { launchAtLogin }, set: setLaunchAtLogin))
+            // The closure literal avoids a reabstraction thunk for the method reference.
+            // Swift 6.3.3 (Xcode 26.6) crashes in IRGen on that thunk. See issue #33.
+            Toggle("Launch at login", isOn: Binding(
+                get: { launchAtLogin },
+                set: { newValue in setLaunchAtLogin(newValue) }
+            ))
         } header: {
             Text("Behavior")
         }

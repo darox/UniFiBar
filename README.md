@@ -1,15 +1,15 @@
 <div align="center">
 
-<img src="docs/app-icon.png" width="128" alt="UniFiBar — UniFi WiFi monitor for macOS menu bar" />
+<img src="docs/app-icon.png" width="128" alt="UniFiBar, a UniFi WiFi monitor for the macOS menu bar" />
 
 # UniFiBar
 
 **Real-time UniFi WiFi monitoring in your macOS menu bar.**
 
-Monitor WiFi signal strength, latency, throughput, roaming, and network health — all from your menu bar. Built for Ubiquiti UniFi users who want instant visibility into their wireless connection.
+Monitor WiFi signal strength, latency, throughput, roaming, and network health from the menu bar. Built for Ubiquiti UniFi users who want instant visibility into their wireless connection.
 
 [![Swift 6](https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white)](https://swift.org)
-[![macOS 26–27](https://img.shields.io/badge/macOS-26_%7C_27-000000?logo=apple&logoColor=white)](https://developer.apple.com/macos/)
+[![macOS 26 and 27](https://img.shields.io/badge/macOS-26_%7C_27-000000?logo=apple&logoColor=white)](https://developer.apple.com/macos/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 <img src="docs/screenshot.png" width="420" alt="UniFiBar screenshot showing WiFi experience, signal strength, access point details, WAN latency, and network overview in the macOS menu bar" />
@@ -18,19 +18,19 @@ Monitor WiFi signal strength, latency, throughput, roaming, and network health �
 
 ## Features
 
-- **WiFi Experience Score** — real-time satisfaction percentage with trend indicators
-- **Signal Monitoring** — RSSI, noise floor, and signal quality trends
-- **Access Point Details** — current AP, channel, WiFi standard, MIMO configuration
-- **Link Speeds** — Rx/Tx rates, session data transfer totals
-- **Roaming Detection** — alerts when your Mac switches between access points
-- **Internet Health** — WAN status, ISP name, latency, availability, packet drops
-- **Gateway Monitoring** — CPU, memory, uptime of your UniFi gateway
-- **WAN Throughput** — real-time upload/download speeds
-- **VPN Tunnels** — configured site-to-site tunnels; absent live status is shown as unknown (not client VPN apps)
-- **Network Overview** — total clients, devices online/offline, firmware updates
-- **Session History** — daily roaming breakdown by access point
-- **Launch at Login** — optional autostart via macOS login items
-- **Self-Signed Certificates** — works with custom SSL setups
+- **WiFi Experience Score.** Real-time satisfaction percentage with trend indicators
+- **Signal Monitoring.** RSSI, noise floor, and signal quality trends
+- **Access Point Details.** Current AP, channel, WiFi standard, MIMO configuration
+- **Link Speeds.** Rx/Tx rates, session data transfer totals
+- **Roaming Detection.** Alerts when your Mac switches between access points
+- **Internet Health.** WAN status, ISP name, latency, availability, packet drops
+- **Gateway Monitoring.** CPU, memory, uptime of your UniFi gateway
+- **WAN Throughput.** Real-time upload/download speeds
+- **VPN Tunnels.** Configured site-to-site tunnels; absent live status is shown as unknown (not client VPN apps)
+- **Network Overview.** Total clients, devices online/offline, firmware updates
+- **Session History.** Daily roaming breakdown by access point
+- **Launch at Login.** Optional autostart via macOS login items
+- **Self-Signed Certificates.** Works with custom SSL setups
 
 ## Supported Hardware
 
@@ -87,8 +87,8 @@ For test commands, worktree setup, and macOS QA, read
 UniFiBar matches your Mac's local IP address against the controller's active clients. It polls every 30 seconds by default, configurable from 10 to 300 seconds, and backs off up to 300 seconds after a failed poll. Network changes and wake-from-sleep trigger an immediate refresh.
 
 **Data sources:**
-- Official UniFi Integration API — devices, sites, statistics, VPN tunnels
-- UniFi v2 and legacy APIs — active clients, WAN health, session history, optional monitoring
+- Official UniFi Integration API: devices, sites, statistics, VPN tunnels
+- UniFi v2 and legacy APIs: active clients, WAN health, session history, optional monitoring
 
 Credentials are stored in the macOS Keychain. Monitoring requests go to your
 controller and update checks go to GitHub. Diagnostics stay local until you copy
@@ -104,7 +104,7 @@ URL and API key again.
 
 - **Swift 6** with strict concurrency
 - **SwiftUI** with Liquid Glass materials (macOS 26 and 27)
-- **SwiftPM** — no Xcode project required
+- **SwiftPM** with no Xcode project required
 - **async/await** with actor isolation for thread safety
 
 ## Security

@@ -70,7 +70,7 @@ the same formats/bounds. Relevant schemas are `Site overview page` and
 `Adopted device overview page` in S1; S2 calls the device schema
 `Device overview page`.
 
-**Synthetic schema-shaped example — not captured controller output:**
+**Synthetic schema-shaped example. Not captured controller output.**
 
 ```json
 {

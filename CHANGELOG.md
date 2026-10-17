@@ -17,7 +17,7 @@
 - Menu footer buttons carry help tags, and Quit uses a power symbol instead of a close symbol. (macOS 27 hides menu item symbol images by default; UniFiBar presents a window-style menu bar extra, so it is unaffected.)
 - Requirements and checks now cover macOS 26 or 27 with Xcode 26 or 27. CI tests the macOS 26 image and, as a non-blocking preview, the `xcode-27` image with the macOS 27 SDK.
 
-## [1.0.0] — 2026-05-09
+## [1.0.0] - 2026-05-09
 
 ### Added
 - WiFi Experience Score with satisfaction percentage and trend indicators

@@ -11,9 +11,10 @@ unifbar-debug.log
 # Debug scripts with credential access
 Scripts/api_debug.swift
 
-# Claude/AI tooling
+# Agent tooling. Local only, never published.
+.agents/
+.claude/
+tasks/
 BRIEF.md
 CLAUDE.md
 SKILLS_SETUP.md
-tasks/
-.claude/

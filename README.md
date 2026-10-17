@@ -84,33 +84,21 @@ For test commands, worktree setup, and macOS QA, read
 
 ## How It Works
 
-UniFiBar connects to your UniFi controller's API and identifies your Mac by matching its local IP address against active clients. It polls every 30 seconds by default. The interval is configurable from 10 to 300 seconds, and failed polls back off up to 300 seconds. The app also reacts instantly to network changes and wake-from-sleep events.
+UniFiBar matches your Mac's local IP address against the controller's active clients. It polls every 30 seconds by default, configurable from 10 to 300 seconds, and backs off up to 300 seconds after a failed poll. Network changes and wake-from-sleep trigger an immediate refresh.
 
 **Data sources:**
 - Official UniFi Integration API — devices, sites, statistics, VPN tunnels
 - UniFi v2 and legacy APIs — active clients, WAN health, session history, optional monitoring
 
 Credentials are stored in the macOS Keychain. Monitoring requests go to your
-configured controller; update checks contact GitHub. Diagnostics remain local
-unless you copy and share them. Copied reports omit identifiers and free-text
-details by default. Preferences offers a one-copy opt-in to include private
-details; review that report for secrets before sharing.
+controller and update checks go to GitHub. Diagnostics stay local until you copy
+them, and copied reports omit identifiers by default.
+
+UniFiBar uses the default site, or the only visible site. Multiple sites without
+a default are rejected.
 
 Upgrading from the old two-item credential format requires entering your controller
-URL and API key again. New saves keep the URL, key and certificate mode together.
-Reset disables automatic reconnection and reports incomplete cleanup rather than
-claiming that inaccessible Keychain entries were removed.
-Missing-entitlement errors require an appropriately signed build with access
-to the original records, not repeated unlock attempts.
-
-Site selection uses the default site when present, otherwise the single visible
-site. Multiple sites without a default are rejected rather than mixed. Official
-and older API requests use the same site's paired identifiers. Official lists
-are paginated within limits; failed, empty and refreshing optional data are
-distinguished in the menu. Large or incompatible responses show errors rather
-than silently truncated totals. Channel numbers are shown without guessing a
-frequency band. Supported-controller replay and native release QA are still
-required; see [development checks](docs/development.md).
+URL and API key again.
 
 ## Tech Stack
 

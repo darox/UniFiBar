@@ -6,6 +6,10 @@
 - macOS 27 (Golden Gate) support: verified build, tests, release bundle and app launch on macOS 27.2 with Xcode 27.1 and the macOS 27.0 SDK. The deployment target stays macOS 26, so Tahoe users keep working.
 
 ### Fixed
+- Menu content sizes to its content, so the last row is no longer clipped (#15).
+- Wake and network-path events refresh through a 60-second throttle instead of bypassing the poll backoff (#28).
+- `package_app.sh` prints the resolved bundle path, which launchd accepts (#29).
+- Preferences shows the connect-throttle countdown and disables Update until the deadline lifts (#30).
 - The release bundle carries only entitlements that an ad-hoc signature can use. `keychain-access-groups` with `$(AppIdentifierPrefix)` cannot resolve without a provisioning profile; macOS rejects the entitlement and launchd refuses to start the bundle. `package_app.sh` now fails loudly if a placeholder reappears.
 
 ### Changed

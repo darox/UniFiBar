@@ -309,7 +309,7 @@ preference persistence and login-toggle load/failure rollback. Programmatic acti
 are not keyboard/VoiceOver or real login-item validation. Successful credential
 connection and physical lifecycle checks still need an authorized QA environment.
 
-See [the finish-audit report](audit-finish-2026-09-08.md) for actual results
+See [the finish-audit report](archive/audit-finish-2026-09-08.md) for actual results
 and release gates. A beta-host fixture pass is not stable macOS 26 or 27 verification.
 
 Preferences contains an event log and a report export. Both copy actions redact

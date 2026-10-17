@@ -1,0 +1,24 @@
+#!/bin/sh
+# Refuse to publish T3 Code checkpoint refs.
+#
+# The checkpoints under refs/t3 commit the whole working tree, ignored files
+# included, so they can hold live secrets. A plain `git push` of a branch is
+# safe; `git push --mirror` and an explicit `refs/t3/...` refspec are not.
+# See docs/development.md and issue #32.
+
+status=0
+# Fields 2 to 4 carry the local SHA, remote ref and remote SHA. Only the ref matters here.
+while read -r local_ref _local_sha _remote_ref _remote_sha; do
+    case "$local_ref" in
+        refs/t3/*)
+            echo "pre-push: refusing to publish the checkpoint ref $local_ref" >&2
+            status=1
+            ;;
+    esac
+done
+
+if [ "$status" -ne 0 ]; then
+    echo "pre-push: delete the checkpoints first with Scripts/prune_checkpoints.sh" >&2
+fi
+
+exit "$status"

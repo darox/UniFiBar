@@ -11,10 +11,10 @@ if [ "$#" -gt 1 ]; then
 fi
 cd "$(dirname "$0")/.."
 
-for script in Scripts/*.sh; do
+for script in Scripts/*.sh Scripts/hooks/*; do
     bash -n "$script"
 done
-shellcheck -x -P SCRIPTDIR Scripts/*.sh
+shellcheck -x -P SCRIPTDIR Scripts/*.sh Scripts/hooks/*
 
 bash Scripts/check_secrets.sh
 

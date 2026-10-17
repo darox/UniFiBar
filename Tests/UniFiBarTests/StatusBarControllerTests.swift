@@ -1048,6 +1048,54 @@ struct StatusBarControllerTests {
         }
     }
 
+    @Test(.timeLimit(.minutes(1)))
+    func recoveryEventsRefreshOncePerThrottleWindow() async throws {
+        try await withDefaults { defaults in
+            let fake = FakeClient()
+            let clock = OSAllocatedUnfairLock(initialState: Date(timeIntervalSince1970: 1_000_000))
+            let controller = makeController(fake: fake, defaults: defaults, now: { clock.withLock { $0 } })
+            defer { controller.tearDown() }
+            await refresh(controller)
+
+            // The first event refreshes, then restarts the poll loop. Drain that loop so the
+            // next call is not dropped by an in-flight refresh instead of by the throttle.
+            let first = await controller.handleRecoveryEvent(generation: controller.refreshGeneration)
+            #expect(first)
+            let firstPoll = controller.pollTask
+            controller.stopPolling()
+            await firstPoll?.value
+            let afterFirst = await fake.devicesFetchCount
+            #expect(afterFirst > 0)
+
+            // An immediate second event is dropped by the throttle and refreshes nothing.
+            let second = await controller.handleRecoveryEvent(generation: controller.refreshGeneration)
+            #expect(!second)
+            let afterSecond = await fake.devicesFetchCount
+            #expect(afterSecond == afterFirst)
+
+            // Once the window expires the next event refreshes again.
+            clock.withLock { $0 = $0.addingTimeInterval(61) }
+            let third = await controller.handleRecoveryEvent(generation: controller.refreshGeneration)
+            #expect(third)
+            let secondPoll = controller.pollTask
+            controller.stopPolling()
+            await secondPoll?.value
+            let afterThird = await fake.devicesFetchCount
+            #expect(afterThird == afterSecond + 1)
+        }
+    }
+
+    @Test func recoveryThrottleAllowsOneAttemptPerInterval() {
+        let throttle = RecoveryThrottle(interval: 60)
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        #expect(throttle.allow(at: start))
+        #expect(!throttle.allow(at: start.addingTimeInterval(59.9)))
+        #expect(throttle.allow(at: start.addingTimeInterval(60)))
+        #expect(!throttle.allow(at: start.addingTimeInterval(61)))
+        throttle.reset()
+        #expect(throttle.allow(at: start.addingTimeInterval(61)))
+    }
+
     @Test func hiddenCoreSectionsSkipTheirRequests() async {
         await withDefaults { defaults in
             let fake = FakeClient()

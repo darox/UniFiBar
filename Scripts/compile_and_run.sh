@@ -13,6 +13,10 @@ echo "==> Building $APP_NAME (debug)..."
 cd "$PROJECT_DIR"
 swift build 2>&1
 
+# .build/debug is a symlink on this toolchain, and launchd refuses a bundle launched
+# through it. Resolve the real directory before assembling or signing.
+APP_BUNDLE="$(cd "$(dirname "$APP_BUNDLE")" && pwd -P)/$(basename "$APP_BUNDLE")"
+
 BINARY="$BUILD_DIR/debug/$APP_NAME"
 if [ ! -f "$BINARY" ]; then
     echo "ERROR: Binary not found at $BINARY"

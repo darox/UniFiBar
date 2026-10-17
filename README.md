@@ -12,8 +12,6 @@ Monitor WiFi signal strength, latency, throughput, roaming, and network health f
 [![macOS 26 and 27](https://img.shields.io/badge/macOS-26_%7C_27-000000?logo=apple&logoColor=white)](https://developer.apple.com/macos/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-<img src="docs/screenshot.png" width="420" alt="UniFiBar screenshot showing WiFi experience, signal strength, access point details, WAN latency, and network overview in the macOS menu bar" />
-
 </div>
 
 ## Features

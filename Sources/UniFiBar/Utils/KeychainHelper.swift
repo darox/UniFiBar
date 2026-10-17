@@ -128,8 +128,7 @@ actor KeychainHelper: KeychainHelperProtocol {
     func delete(_ key: Key) throws {
         var failure: Error?
         for protected in [true, false] {
-            do { try remove(key, protected: protected) }
-            catch { failure = failure ?? error }
+            do { try remove(key, protected: protected) } catch { failure = failure ?? error }
         }
         // An inaccessible old backend is not proof that its credentials were removed.
         if let failure { throw failure }

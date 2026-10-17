@@ -337,8 +337,7 @@ struct PreferencesManagerTests {
             await keychain.pauseNext(operation)
             var pauses = keychain.pauses.stream.makeAsyncIterator()
             let pending = Task {
-                if operation == .read { await prefs.checkConfiguration() }
-                else { try await prefs.save(controllerURL: "https://new.invalid", apiKey: "new-key", allowSelfSigned: false) }
+                if operation == .read { await prefs.checkConfiguration() } else { try await prefs.save(controllerURL: "https://new.invalid", apiKey: "new-key", allowSelfSigned: false) }
             }
             #expect(await pauses.next() == operation)
             let cleanup = prefs.resetAll()

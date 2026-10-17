@@ -1,55 +1,6 @@
 import Foundation
 import ServiceManagement
 
-// MARK: - Section Visibility
-
-enum MenuSection: String, CaseIterable, Sendable {
-    case internet = "internet"
-    case vpn = "vpn"
-    case wifi = "wifi"
-    case network = "network"
-    case sessionHistory = "sessionHistory"
-    case ddns = "ddns"
-    case portForwards = "portForwards"
-    case nearbyAPs = "nearbyAPs"
-
-    var displayName: String {
-        switch self {
-        case .internet: return "Internet & Gateway"
-        case .vpn: return "VPN Tunnels"
-        case .wifi: return "WiFi & Connection"
-        case .network: return "Network Overview"
-        case .sessionHistory: return "Session History"
-        case .ddns: return "Dynamic DNS"
-        case .portForwards: return "Port Forwards"
-        case .nearbyAPs: return "Nearby APs"
-        }
-    }
-
-    var icon: String {
-        switch self {
-        case .internet: return "globe"
-        case .vpn: return "lock.shield"
-        case .wifi: return "wifi"
-        case .network: return "network"
-        case .sessionHistory: return "clock"
-        case .ddns: return "link"
-        case .portForwards: return "arrow.right.arrow.left"
-        case .nearbyAPs: return "antenna.radiowaves.left.and.right"
-        }
-    }
-
-    /// Whether this section is shown by default
-    var defaultEnabled: Bool {
-        switch self {
-        case .internet, .vpn, .wifi, .network, .sessionHistory:
-            return true
-        case .ddns, .portForwards, .nearbyAPs:
-            return false
-        }
-    }
-}
-
 /// URL, key and trust mode must be restored from the same committed item.
 struct StoredCredentials: Codable, Equatable, Sendable {
     var version = 1
@@ -125,7 +76,7 @@ final class PreferencesManager {
         allowSelfSignedCerts = defaults.bool(forKey: selfSignedKey)
         compactMode = defaults.object(forKey: compactModeKey) as? Bool ?? false
         let savedInterval = defaults.object(forKey: pollIntervalKey) as? Int ?? 30
-        pollIntervalSeconds = max(10, min(300, savedInterval))
+        pollIntervalSeconds = Self.clampedPollInterval(savedInterval)
         if let saved = defaults.dictionary(forKey: sectionVisibilityKey) as? [String: Bool] {
             sectionVisibility = saved
         }
@@ -178,7 +129,11 @@ final class PreferencesManager {
         isConfigured = cachedURL != nil && cachedAPIKey != nil
     }
 
-    func loadClient() async -> UniFiClientProtocol? {
+    /// `confirmCertificate` is supplied only for a user-requested re-pin. Background
+    /// polling keeps it nil unless the controller explicitly arms a one-shot prompt.
+    func loadClient(
+        confirmCertificate: (@Sendable (PinnedCertDelegate.CertificateDetails) async -> Bool)? = nil
+    ) async -> UniFiClientProtocol? {
         guard automaticConnectionAllowed else { return nil }
         if cachedURL == nil || cachedAPIKey == nil {
             await checkConfiguration()
@@ -194,10 +149,10 @@ final class PreferencesManager {
         return UniFiClient(
             baseURL: url,
             apiKey: apiKey,
-            allowSelfSigned: allowSelfSignedCerts
+            allowSelfSigned: allowSelfSignedCerts,
+            confirmCertificate: confirmCertificate
         )
     }
-
 
     func save(controllerURL: String, apiKey: String, allowSelfSigned: Bool,
               isCurrent: @MainActor () -> Bool = { true }) async throws {
@@ -235,12 +190,17 @@ final class PreferencesManager {
 
     private func releaseCredentials() {
         // ponytail: tiny FIFO per preferences instance; not a cross-process transaction lock.
-        if credentialWaiters.isEmpty { credentialBusy = false }
-        else { credentialWaiters.removeFirst().resume() }
+        if credentialWaiters.isEmpty { credentialBusy = false } else { credentialWaiters.removeFirst().resume() }
+    }
+
+    /// The one interval range shared by load and save; the UI offers a subset of these values.
+    static let pollIntervalRange = 10...300
+    static func clampedPollInterval(_ seconds: Int) -> Int {
+        min(max(seconds, pollIntervalRange.lowerBound), pollIntervalRange.upperBound)
     }
 
     func setPollInterval(_ seconds: Int) {
-        let clamped = max(10, min(300, seconds))
+        let clamped = Self.clampedPollInterval(seconds)
         pollIntervalSeconds = clamped
         defaults.set(clamped, forKey: pollIntervalKey)
     }
@@ -270,8 +230,7 @@ final class PreferencesManager {
             var failures: [String] = []
             var requiresEntitledBuild = false
             for key in KeychainHelper.Key.allCases {
-                do { try await keychain.delete(key) }
-                catch {
+                do { try await keychain.delete(key) } catch {
                     if !failures.contains("credentials") { failures.append("credentials") }
                     requiresEntitledBuild = requiresEntitledBuild || (error as? KeychainError)?.requiresEntitledBuild == true
                 }

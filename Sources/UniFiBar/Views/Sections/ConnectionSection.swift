@@ -151,8 +151,11 @@ struct NetworkSection: View {
         }
 
         if let offlineNames = offlineDeviceNames {
-            ForEach(offlineNames, id: \.self) { name in
+            ForEach(offlineNames.prefix(DisplayLimits.rows), id: \.self) { name in
                 MetricRow(label: name, value: "offline", systemImage: "exclamationmark.circle")
+            }
+            if offlineNames.count > DisplayLimits.rows {
+                TruncationNote(hiddenCount: offlineNames.count - DisplayLimits.rows, noun: "devices")
             }
         }
 

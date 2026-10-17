@@ -4,6 +4,8 @@ import PackageDescription
 
 let package = Package(
     name: "UniFiBar",
+    // The deployment target stays macOS 26 so Tahoe users keep working. The sources
+    // also compile and pass tests against the macOS 27 SDK with Xcode 27.
     platforms: [
         .macOS(.v26)
     ],

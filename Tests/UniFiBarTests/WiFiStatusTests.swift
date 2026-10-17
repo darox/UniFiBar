@@ -53,9 +53,8 @@ struct WiFiStatusTests {
 
     @Test func testInvalidLoadsAreDiscardedBeforeIntegerConversion() throws {
         let status = WiFiStatus()
-        status.updateAPStats(APStats(uptimeSec: nil, cpuUtilizationPct: 1e300, memoryUtilizationPct: -1))
-        status.updateGateway(GatewayStats(uptimeSec: nil, cpuUtilizationPct: -1, memoryUtilizationPct: 1e300,
-                                         uplinkTxRateBps: nil, uplinkRxRateBps: nil), device: nil)
+        status.updateAPStats(APStats(cpuUtilizationPct: 1e300, memoryUtilizationPct: -1))
+        status.updateGateway(GatewayStats(uptimeSec: nil, cpuUtilizationPct: -1, memoryUtilizationPct: 1e300), device: nil)
         try #require(status.apCPU == nil && status.apMemory == nil)
         try #require(status.gatewayCPU == nil && status.gatewayMemory == nil)
         #expect(status.formattedAPLoad == nil)
@@ -465,6 +464,30 @@ struct WiFiStatusTests {
         #expect(status.roamedFrom == nil)
     }
 
+    @Test func testRoamDetectedWhenOnlyMACChanges() {
+        // Identical display name but a different AP MAC still counts as a roam.
+        let status = WiFiStatus()
+        func client(apMac: String) -> V2ClientDTO {
+            V2ClientDTO(ip: "192.168.1.5", mac: nil, hostname: nil, displayName: nil, signal: nil, rssi: nil, noise: nil, satisfaction: nil, wifiExperienceScore: nil, wifiExperienceAverage: nil, wifiTxRetriesPercentage: nil, channel: nil, channelWidth: nil, radioProto: nil, radio: nil, essid: nil, apMac: apMac, lastUplinkName: "U7 Pro", rxRate: nil, txRate: nil, rxBytes: nil, txBytes: nil, uptime: nil, mimo: nil, roamCount: nil, ccq: nil, gwMac: nil)
+        }
+        status.update(from: SelfInfo(client: client(apMac: "aa:bb:cc:00:00:01"), totalClients: 1, clientsOnSameAP: 1))
+        #expect(status.recentlyRoamed == false)
+
+        status.update(from: SelfInfo(client: client(apMac: "aa:bb:cc:00:00:02"), totalClients: 1, clientsOnSameAP: 1))
+        #expect(status.recentlyRoamed == true)
+        #expect(status.roamedFrom == "U7 Pro")
+    }
+
+    @Test func testNoRoamWhenOnlyMACCaseChanges() {
+        let status = WiFiStatus()
+        func client(apMac: String) -> V2ClientDTO {
+            V2ClientDTO(ip: "192.168.1.5", mac: nil, hostname: nil, displayName: nil, signal: nil, rssi: nil, noise: nil, satisfaction: nil, wifiExperienceScore: nil, wifiExperienceAverage: nil, wifiTxRetriesPercentage: nil, channel: nil, channelWidth: nil, radioProto: nil, radio: nil, essid: nil, apMac: apMac, lastUplinkName: nil, rxRate: nil, txRate: nil, rxBytes: nil, txBytes: nil, uptime: nil, mimo: nil, roamCount: nil, ccq: nil, gwMac: nil)
+        }
+        status.update(from: SelfInfo(client: client(apMac: "AA:BB:CC:00:00:01"), totalClients: 1, clientsOnSameAP: 1))
+        status.update(from: SelfInfo(client: client(apMac: "aa:bb:cc:00:00:01"), totalClients: 1, clientsOnSameAP: 1))
+        #expect(status.recentlyRoamed == false)
+    }
+
     // MARK: - updateDevices
 
     @Test func testUpdateDevicesPopulated() {
@@ -473,7 +496,7 @@ struct WiFiStatusTests {
             device(id: "1", mac: "aa", name: "U7 Pro", state: "CONNECTED"),
             device(id: "2", mac: "bb", name: "U7 In-Wall", state: "CONNECTED"),
             device(id: "3", mac: "cc", name: "Switch", state: "DISCONNECTED"),
-            device(id: "4", mac: "dd", name: "Old AP", state: "DISCONNECTED", firmwareUpdatable: true),
+            device(id: "4", mac: "dd", name: "Old AP", state: "DISCONNECTED", firmwareUpdatable: true)
         ]
 
         status.updateDevices(devices)
@@ -488,7 +511,7 @@ struct WiFiStatusTests {
         let status = WiFiStatus()
         let devices = [
             device(id: "1", mac: "aa", name: "U7 Pro", state: "ONLINE"),
-            device(id: "2", mac: "bb", name: "UDM", state: "CONNECTED"),
+            device(id: "2", mac: "bb", name: "UDM", state: "CONNECTED")
         ]
 
         status.updateDevices(devices)
@@ -517,7 +540,7 @@ struct WiFiStatusTests {
         let status = WiFiStatus()
         let devices = [
             device(id: "1", mac: "aa", name: "U7 Pro", state: "ONLINE", firmwareUpdatable: true),
-            device(id: "2", mac: "bb", name: "UDM", state: "ONLINE", firmwareUpdatable: true),
+            device(id: "2", mac: "bb", name: "UDM", state: "ONLINE", firmwareUpdatable: true)
         ]
 
         status.updateDevices(devices)
@@ -633,7 +656,7 @@ struct WiFiStatusTests {
         let status = WiFiStatus()
         let tunnels = [
             VPNTunnelDTO(_id: "1", name: "Office", status: "CONNECTED", remoteNetworkCidr: nil, type: nil),
-            VPNTunnelDTO(_id: "2", name: "Home", status: "DOWN", remoteNetworkCidr: nil, type: nil),
+            VPNTunnelDTO(_id: "2", name: "Home", status: "DOWN", remoteNetworkCidr: nil, type: nil)
         ]
 
         status.updateVPN(tunnels)
@@ -658,7 +681,7 @@ struct WiFiStatusTests {
 
     @Test func testUpdateGateway() {
         let status = WiFiStatus()
-        let stats = GatewayStats(uptimeSec: 86400, cpuUtilizationPct: 12.5, memoryUtilizationPct: 45.0, uplinkTxRateBps: nil, uplinkRxRateBps: nil)
+        let stats = GatewayStats(uptimeSec: 86400, cpuUtilizationPct: 12.5, memoryUtilizationPct: 45.0)
         let dev = device(id: "g1", mac: "gg", name: "UCG Fiber", state: "ONLINE")
 
         status.updateGateway(stats, device: dev)
@@ -686,7 +709,7 @@ struct WiFiStatusTests {
 
     @Test func testUpdateAPStats() {
         let status = WiFiStatus()
-        let stats = APStats(uptimeSec: 3600, cpuUtilizationPct: 5.0, memoryUtilizationPct: 30.0)
+        let stats = APStats(cpuUtilizationPct: 5.0, memoryUtilizationPct: 30.0)
         status.updateAPStats(stats)
 
         #expect(status.apCPU == 5.0)
@@ -710,7 +733,7 @@ struct WiFiStatusTests {
         let dtos = [
             SessionDTO(mac: "aa", apMac: "11:22:33", duration: 3600, assocTime: nil),
             SessionDTO(mac: "aa", apMac: "11:22:33", duration: 7200, assocTime: nil),
-            SessionDTO(mac: "aa", apMac: "44:55:66", duration: 1800, assocTime: nil),
+            SessionDTO(mac: "aa", apMac: "44:55:66", duration: 1800, assocTime: nil)
         ]
         let devices: [DeviceDTO] = []
 
@@ -949,9 +972,7 @@ struct WiFiStatusTests {
             model: nil,
             state: state,
             firmwareUpdatable: firmwareUpdatable,
-            features: nil,
-            firmwareVersion: nil,
-            ipAddress: nil
+            features: nil
         )
     }
 }

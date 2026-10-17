@@ -5,29 +5,20 @@ struct DDNSSection: View {
 
     var body: some View {
         CollapsibleSection(title: "Dynamic DNS", defaultExpanded: false) {
-            ForEach(statuses) { ddns in
-                HStack(spacing: 6) {
-                    Image(systemName: ddns.isActive ? "link" : "link.badge.plus")
-                        .foregroundStyle(ddns.isActive ? .green : .red)
-                        .frame(width: 20, alignment: .center)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(String((ddns.hostName ?? "DDNS").prefix(64)))
-                            .font(.callout)
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                        if let service = ddns.service, !service.isEmpty {
-                            Text(service.capitalized)
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                    Spacer()
-                    Text(ddns.displayStatus)
-                        .font(.callout)
-                        .foregroundStyle(ddns.isActive ? Color.secondary : Color.red)
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 1)
+            ForEach(statuses.prefix(DisplayLimits.rows)) { ddns in
+                DetailRow(
+                    systemImage: ddns.isActive ? "link" : "link.badge.plus",
+                    iconColor: ddns.isActive ? .green : .red,
+                    title: String((ddns.hostName ?? "DDNS").prefix(64)),
+                    subtitle: ddns.service.flatMap { $0.isEmpty ? nil : $0.capitalized },
+                    trailing: ddns.displayStatus,
+                    trailingColor: ddns.isActive ? .secondary : .red
+                )
+            }
+
+            if statuses.count > DisplayLimits.rows {
+                TruncationNote(hiddenCount: statuses.count - DisplayLimits.rows, noun: "hosts")
+                    .padding(.top, 0)
             }
         }
     }

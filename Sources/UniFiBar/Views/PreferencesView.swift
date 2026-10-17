@@ -3,13 +3,10 @@ import SwiftUI
 
 struct PreferencesView: View {
     let controller: StatusBarController
-    var makeClient: @MainActor (URL, String, Bool) -> any UniFiClientProtocol = {
-        UniFiClient(baseURL: $0, apiKey: $1, allowSelfSigned: $2, confirmCertificate: confirmControllerCertificate)
-    }
+    var makeClient: @MainActor (URL, String, Bool) -> any UniFiClientProtocol = CredentialFlow.makeDefaultClient
     var loginItemIsEnabled: @MainActor () -> Bool = { SMAppService.mainApp.status == .enabled }
     var setLoginItemEnabled: @MainActor (Bool) throws -> Void = { enabled in
-        if enabled { try SMAppService.mainApp.register() }
-        else { try SMAppService.mainApp.unregister() }
+        if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
     }
     var copyReport: @MainActor (String) -> Void = DiagnosticsLog.copyToClipboard
 
@@ -211,43 +208,23 @@ struct PreferencesView: View {
         isSaving = true
         defer { if !Task.isCancelled { isSaving = false } }
 
-        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let outcome = await CredentialFlow.connect(
+            controller: controller,
+            urlString: controllerURL,
+            apiKey: apiKey,
+            allowSelfSigned: allowSelfSigned,
+            makeClient: makeClient
+        )
 
-        let result = URLValidator.normalizeAndValidate(controllerURL)
-        guard case .success(let url) = result else {
-            if case .failure(let error) = result {
-                errorMessage = error.errorDescription
-            }
-            return
-        }
-
-        let testClient = makeClient(url, trimmedKey, allowSelfSigned)
-
-        do {
-            try await controller.connect(using: testClient, url: url, apiKey: trimmedKey, allowSelfSigned: allowSelfSigned)
-            try Task.checkCancellation()
+        switch outcome {
+        case .connected:
             isEditingCredentials = false
-        } catch is CancellationError {
+        case .cancelled:
             return
-        } catch let error as UniFiError {
-            switch error {
-            case .httpError(let code) where code == 401 || code == 403:
-                errorMessage = "Authentication failed. Check your API key."
-            case .httpError(let code):
-                errorMessage = "Server returned HTTP \(code). Check your controller URL."
-            case .noSitesFound:
-                errorMessage = "Connected, but no sites found on this controller."
-            default:
-                errorMessage = error.errorDescription
-            }
-        } catch let error as CertificateConnectionError {
-            errorMessage = error.errorDescription
-        } catch is URLError {
-            errorMessage = "Could not reach the controller. Check the URL and your network connection."
-        } catch let error as KeychainError {
-            errorMessage = error.errorDescription
-        } catch {
-            errorMessage = "Connection failed. Check your URL and network settings."
+        case .urlInvalid(let message):
+            errorMessage = message
+        case .failed(let error):
+            errorMessage = StatusBarController.connectionErrorMessage(for: error)
         }
     }
 
@@ -288,17 +265,19 @@ struct DiagnosticsSection: View {
     var body: some View {
         Section {
             let log = controller.diagnosticsLog
-            let events = log.recentEvents
+            let events = log.recentEvents(limit: DisplayLimits.rows)
 
             LabeledContent("Version") {
                 VStack(alignment: .trailing, spacing: 2) {
                     Text("v\(controller.updateChecker.currentVersion)")
                         .onTapGesture {
+                            #if DEBUG
                             versionTapCount += 1
                             if versionTapCount >= 5 {
                                 versionTapCount = 0
                                 controller.updateChecker.toggleDebugUpdate()
                             }
+                            #endif
                         }
                     if controller.updateChecker.updateAvailable, let latest = controller.updateChecker.latestVersion {
                         Button("v\(latest) available") {
@@ -319,6 +298,7 @@ struct DiagnosticsSection: View {
                 Text("\(controller.currentPollInterval)s")
             }
 
+            #if DEBUG
             LabeledContent("Debug Mode") {
                 Toggle(isOn: Binding(
                     get: { controller.updateChecker.isDebugMode },
@@ -331,10 +311,11 @@ struct DiagnosticsSection: View {
                 .labelsHidden()
                 .accessibilityLabel("Debug Mode")
             }
+            #endif
 
             if !events.isEmpty {
                 DisclosureGroup("Events (\(events.count))") {
-                    ForEach(events.prefix(20)) { event in
+                    ForEach(events) { event in
                         HStack(spacing: 6) {
                             Circle()
                                 .fill(event.level == .error ? Color.red : event.level == .warning ? Color.orange : Color.green)

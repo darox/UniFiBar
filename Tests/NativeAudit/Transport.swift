@@ -2,7 +2,6 @@ import Foundation
 import os
 import Security
 
-
 // Actual URLSession/TLS; only pin persistence is in-memory. Production delegates and
 // boundedResponseData execute unchanged. Native persistence is exercised separately.
 func transportCheck(_ mode: String, port: Int, pinByte: UInt8? = nil) async throws {
@@ -50,8 +49,7 @@ func transportCheck(_ mode: String, port: Int, pinByte: UInt8? = nil) async thro
             headersReceived.continuation.yield(())
             return try await UniFiClient.boundedResponseData(bytes, response: response, limit: 1024)
         }
-        do { return try await readResponse() }
-        catch {
+        do { return try await readResponse() } catch {
             guard await delegate.approvePendingCertificate() else { throw error }
             return try await readResponse()
         }
@@ -107,8 +105,7 @@ func transportCheck(_ mode: String, port: Int, pinByte: UInt8? = nil) async thro
         let client = UniFiClient(baseURL: URL(string: "https://127.0.0.1:\(port)")!,
             apiKey: "synthetic-loopback-only", allowSelfSigned: true, confirmCertificate: approval, pinStore: store)
         let result: Result<String, Error>
-        do { result = .success(try await client.fetchSiteId()) }
-        catch { result = .failure(error) }
+        do { result = .success(try await client.fetchSiteId()) } catch { result = .failure(error) }
         await client.invalidate()
         if mode == "approved-bad-host" {
             try require(try result.get() == "fixture-site", "production client retries and discovers the site after approval")

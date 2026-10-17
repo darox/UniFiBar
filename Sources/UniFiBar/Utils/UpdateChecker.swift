@@ -6,7 +6,6 @@ final class UpdateChecker {
     var updateAvailable = false
     var latestVersion: String?
     var releaseURL: URL?
-    var releaseNotes: String?
     private(set) var isDebugMode = false
 
     private let repoOwner = "darox"
@@ -29,7 +28,7 @@ final class UpdateChecker {
             configuration.timeoutIntervalForResource = 30
             let session = URLSession(configuration: configuration)
             defer { session.invalidateAndCancel() }
-            let (bytes, response) = try await session.bytes(for: $0)
+            let (bytes, response) = try await session.bytes(for: $0, delegate: SameOriginRedirectDelegate())
             defer { bytes.task.cancel() }
             return (try await UniFiClient.boundedResponseData(bytes, response: response, limit: 1_024 * 1_024), response)
         }
@@ -40,6 +39,7 @@ final class UpdateChecker {
         self.fetch = fetch
     }
 
+#if DEBUG
     /// Debug: toggle a fake update indicator for UI testing. Tap version 5 times in Preferences to trigger.
     func toggleDebugUpdate() {
         if isDebugMode {
@@ -55,6 +55,7 @@ final class UpdateChecker {
             releaseURL = URL(string: "https://github.com/darox/UniFiBar/releases")
         }
     }
+#endif
 
     var currentVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
@@ -110,7 +111,6 @@ final class UpdateChecker {
                 updateAvailable = true
                 latestVersion = tag
                 releaseURL = trustedURL
-                releaseNotes = release.body
             }
             defaults.set(now(), forKey: lastCheckKey)
         } catch {
@@ -158,11 +158,9 @@ final class UpdateChecker {
 private struct GitHubRelease: Decodable, Sendable {
     let tagName: String
     let htmlURL: String
-    let body: String?
 
     enum CodingKeys: String, CodingKey {
         case tagName = "tag_name"
         case htmlURL = "html_url"
-        case body
     }
 }

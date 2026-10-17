@@ -6,7 +6,7 @@ struct SessionTimeSection: View {
     var body: some View {
         SubSectionHeader(title: "Session Time")
 
-        ForEach(sessions) { session in
+        ForEach(sessions.prefix(DisplayLimits.rows)) { session in
             HStack(spacing: 8) {
                 Text(session.apName)
                     .font(.callout)
@@ -16,7 +16,7 @@ struct SessionTimeSection: View {
 
                 ProgressBarView(fraction: session.fraction, color: .accentColor)
 
-                Text(formattedDuration(session.duration))
+                Text(Formatters.duration(seconds: session.duration))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
@@ -25,22 +25,9 @@ struct SessionTimeSection: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 1)
         }
-    }
 
-    private func formattedDuration(_ seconds: Int) -> String {
-        let hours = seconds / 3600
-        let minutes = (seconds % 3600) / 60
-        if hours >= 24 {
-            let days = hours / 24
-            let remainingHours = hours % 24
-            if remainingHours > 0 {
-                return "\(days)d \(remainingHours)h"
-            }
-            return "\(days)d"
+        if sessions.count > DisplayLimits.rows {
+            TruncationNote(hiddenCount: sessions.count - DisplayLimits.rows, noun: "APs")
         }
-        if hours > 0 {
-            return "\(hours)h \(minutes)m"
-        }
-        return "\(minutes)m"
     }
 }

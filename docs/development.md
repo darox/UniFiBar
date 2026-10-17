@@ -6,6 +6,11 @@ Full checks need macOS 26 or 27, Xcode 26 or 27 with Swift 6.2 or later,
 Python 3, and ShellCheck. Check the selected tools with `xcode-select -p`,
 `xcrun --show-sdk-version`, and `swift --version`.
 Install ShellCheck with `brew install shellcheck` if it is absent.
+Install SwiftLint with `brew install swiftlint` and actionlint with
+`brew install actionlint` if they are absent. `.github/actionlint.yaml` declares
+the preview runner labels that GitHub omits from its public label list.
+SwiftLint runs in `check.sh` and in CI. `.swiftlint.yml` documents
+which rules are off and why.
 Xcode 26 ships the macOS 26 SDK, so keep to APIs that exist there: macOS 27
 additions such as `.textFieldStyle(.bordered)` fail to build with Xcode 26 and
 belong behind a compiler or availability gate when they are worth adopting.
@@ -35,10 +40,52 @@ swift test --filter PreferencesManagerTests
 bash Scripts/check.sh
 ```
 
+`check_secrets.sh` scans tracked files and every ref's reachable history for known
+token shapes, private-key headers and secret-bearing file types. It is a tripwire,
+not proof. Add a pattern when a new credential shape appears.
+
+The history scan exists because an ignored file is not a safe file. Agent tooling
+(the T3 Code checkpoints under `refs/t3`) commits the whole working tree, ignored
+files included. If the scan reports a file, rotate the credential first, then
+delete the refs that hold it:
+
+```bash
+git for-each-ref --format='%(refname)' refs/t3 | xargs -r -n1 git update-ref -d
+git reflog expire --expire=now --all && git gc --prune=now
+```
+
+Push explicit branches and tags only. Never `git push --all` or `git push --mirror`,
+which would publish those refs.
+
 The full command verifies the release bundle's plist and code signature.
-It does not launch the app or test the display. It returns status 2 on Linux;
-a portable pass is not a full pass. Swift compilation is the current Swift
-check; this repository has no separate Swift lint configuration.
+It does not launch the app or test the display. It returns status 2 on Linux. A portable pass is not a full pass.
+Do not launch the bundle through `.build/release/UniFiBar.app`. That path is a
+symlink, and launchd refuses it. Copy the bundle first, or open
+`.build/out/Products/Release/UniFiBar.app`.
+SwiftLint enforces the style gate. `check.sh` skips a missing tool with a notice
+on a developer machine and fails when `CI` is set, so a workflow cannot pass with a
+gate that did not run.
+CI runs the portable gate plus lint on the macOS 26 image, and lint plus the full
+test suite on the macOS 26 image. It repeats lint and tests on the `xcode-27` preview image, which
+carries Xcode 27 and the macOS 27 SDK. That job is non-blocking while GitHub
+marks the image as preview.
+
+### macOS 27 verification
+
+Verified on macOS 27.2, build 26B5112a, with Xcode 27.1 and the macOS 27.0 SDK:
+
+- `swift test` passes, 227 tests in 15 suites, including `CertificatePinTests`.
+- `package_app.sh` builds, assembles and ad-hoc signs the release bundle.
+- `codesign --verify --deep --strict` passes and the bundle reports `minos 26.0`.
+- The app launches from the built bundle and stays running.
+
+The same run found two launch traps that are not code defects:
+
+- An entitlement placeholder such as `$(AppIdentifierPrefix)` fails in an ad-hoc
+  signature. macOS rejects it and launchd refuses the bundle. `package_app.sh`
+  fails loudly instead.
+- Launchd refuses the bundle through the `.build/release` symlink. Use the real
+  path or a copy.
 
 Preference and controller tests use a separate UserDefaults suite for each case
 and always inject `FakeKeychain`, including non-credential tests. Native `testResetAll()`
@@ -49,6 +96,26 @@ an in-memory fixture. Native reset and certificate-pin cleanup remain lab QA.
 Ordinary credential tests must never access the real Keychain. The explicit native
 fixture command below is the only direct-host exception: exact synthetic namespaces,
 not application records.
+
+### Sandboxed agent runs
+
+Restricted sandboxes (for example AI agent shells) block parts of the build.
+Run tests there with explicit cache paths:
+
+```bash
+SWIFTPM_MODULECACHE_OVERRIDE=/tmp/pm-cache swift test \
+    --disable-sandbox --scratch-path /tmp/ufb-build
+```
+
+`CertificatePinTests` need live Security framework access. Their SecTrust
+success paths fail in sandboxed processes even at a clean checkout. Treat a
+certificate failure in a sandbox as environmental until an unsandboxed run
+proves otherwise. The full suite also touches `NSUserDefaults` suites and can
+stall on host-only paths under a sandbox; run `bash Scripts/check.sh` once on
+the host before you trust sandbox results.
+
+`Scripts/benchmark_sessions.sh` builds and runs the synthetic session
+benchmark. It is a manual tool, not part of `check.sh`.
 
 ### Credential format and reset lifecycle
 
@@ -174,7 +241,7 @@ does not have the packaged app's metadata and icons. Use the bundle for UI QA.
 On a separate macOS test account, after the full command passes:
 
 ```bash
-open .build/release/UniFiBar.app
+open .build/out/Products/Release/UniFiBar.app
 log stream --style compact --predicate 'subsystem == "com.unifbar.app"'
 ```
 
@@ -239,7 +306,7 @@ are not keyboard/VoiceOver or real login-item validation. Successful credential
 connection and physical lifecycle checks still need an authorized QA environment.
 
 See [the finish-audit report](audit-finish-2026-09-08.md) for actual results
-and release gates. A beta-host fixture pass is not stable macOS 26 verification.
+and release gates. A beta-host fixture pass is not stable macOS 26 or 27 verification.
 
 Preferences contains an event log and a report export. Both copy actions redact
 identifiers and arbitrary text by default, retaining typed metrics, error titles,

@@ -3,6 +3,32 @@ import Testing
 
 struct URLValidatorTests {
 
+    @Test(arguments: ["https://192.168.1.1/proxy/network", "https://controller.invalid/status"])
+    func nonRootPathRejected(raw: String) {
+        guard case .failure(let error) = URLValidator.normalizeAndValidate(raw) else {
+            Issue.record("Non-root path accepted: \(raw)")
+            return
+        }
+        #expect(error == .noPath)
+    }
+
+    @Test(arguments: ["https://192.168.1.1:8443", "https://[fd00::1]:8443", "https://controller.invalid:443"])
+    func explicitPortAccepted(raw: String) {
+        guard case .success = URLValidator.normalizeAndValidate(raw) else {
+            Issue.record("Valid port rejected: \(raw)")
+            return
+        }
+    }
+
+    @Test(arguments: ["https://:secret@controller.invalid", "https://user:secret@controller.invalid"])
+    func userinfoRejected(raw: String) {
+        guard case .failure(let error) = URLValidator.normalizeAndValidate(raw) else {
+            Issue.record("Userinfo accepted: \(raw)")
+            return
+        }
+        #expect(error == .noUserinfo)
+    }
+
     @Test(arguments: ["HTTPS://controller.invalid", "http-controller.invalid"])
     func testSchemeDetection(raw: String) throws {
         let url = try URLValidator.normalizeAndValidate(raw).get()

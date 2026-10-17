@@ -17,6 +17,33 @@ private final class SkipFirstFlag: Sendable {
     }
 }
 
+/// Allows the polling client to ask the user to trust a certificate only after an
+/// explicit pin reset. The permission is consumed by the first challenge, so normal
+/// background polling never prompts and a changed key still fails closed.
+final class TrustPromptGate: Sendable {
+    private struct State: Sendable { var armed = false }
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    private let prompt: @Sendable (PinnedCertDelegate.CertificateDetails) async -> Bool
+
+    init(prompt: @escaping @Sendable (PinnedCertDelegate.CertificateDetails) async -> Bool) {
+        self.prompt = prompt
+    }
+
+    func arm() {
+        state.withLock { $0.armed = true }
+    }
+
+    func consume(_ details: PinnedCertDelegate.CertificateDetails) async -> Bool {
+        let allowed = state.withLock { state -> Bool in
+            guard state.armed else { return false }
+            state.armed = false
+            return true
+        }
+        guard allowed else { return false }
+        return await prompt(details)
+    }
+}
+
 @MainActor
 @Observable
 final class StatusBarController {
@@ -25,12 +52,31 @@ final class StatusBarController {
     let diagnosticsLog = DiagnosticsLog()
     let updateChecker: UpdateChecker
     private let loadClient: @MainActor () async -> UniFiClientProtocol?
+    private let trustPrompt: TrustPromptGate?
+    private let sleep: @Sendable (Duration) async throws -> Void
+    private let now: @Sendable () -> Date
     private let observesSystemEvents: Bool
 
-    init(preferences: PreferencesManager = PreferencesManager()) {
+    init(
+        preferences: PreferencesManager = PreferencesManager(),
+        certificatePrompt: (@Sendable (PinnedCertDelegate.CertificateDetails) async -> Bool)? = { details in
+            await confirmControllerCertificate(details)
+        }
+    ) {
         self.preferences = preferences
-        loadClient = { await preferences.loadClient() }
+        let gate = certificatePrompt.map(TrustPromptGate.init(prompt:))
+        trustPrompt = gate
+        if let gate {
+            let confirm: @Sendable (PinnedCertDelegate.CertificateDetails) async -> Bool = { details in
+                await gate.consume(details)
+            }
+            loadClient = { await preferences.loadClient(confirmCertificate: confirm) }
+        } else {
+            loadClient = { await preferences.loadClient() }
+        }
         updateChecker = UpdateChecker()
+        sleep = { try await Task.sleep(for: $0) }
+        now = { Date() }
         observesSystemEvents = true
     }
 
@@ -39,11 +85,16 @@ final class StatusBarController {
     init(
         fixturePreferences: PreferencesManager,
         updateChecker: UpdateChecker? = nil,
+        sleep: (@Sendable (Duration) async throws -> Void)? = nil,
+        now: (@Sendable () -> Date)? = nil,
         clientLoader: @escaping @MainActor () async -> UniFiClientProtocol?
     ) {
         preferences = fixturePreferences
+        trustPrompt = nil
         loadClient = clientLoader
         self.updateChecker = updateChecker ?? UpdateChecker(checksEnabled: false)
+        self.sleep = sleep ?? { try await Task.sleep(for: $0) }
+        self.now = now ?? { Date() }
         observesSystemEvents = false
     }
 
@@ -57,6 +108,9 @@ final class StatusBarController {
     var hasSystemObservers: Bool { pathMonitor != nil || wakeObserver != nil }
     private var hasStarted = false
     private var consecutiveErrors = 0
+    private var failedConnectAttempts = 0
+    private var connectRetryAvailableAt: Date?
+    private var hasTornDown = false
     private var authFailed = false
     private var lastManualRefresh: Date = .distantPast
     private var successCount = 0
@@ -71,6 +125,13 @@ final class StatusBarController {
     /// Tears down observers. Must be called on @MainActor before the object is released,
     /// since @Observable types have nonisolated deinit which cannot access actor-isolated state.
     func tearDown() {
+        // Pending wake, path, and manual-refresh tasks re-check these generations and
+        // must observe the teardown instead of writing state or restarting polling.
+        // A handler task that starts after the bump would read the new generation, so
+        // the flag is the part that survives that race.
+        hasTornDown = true
+        connectionGeneration += 1
+        refreshGeneration += 1
         if let observer = wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
             wakeObserver = nil
@@ -135,10 +196,17 @@ final class StatusBarController {
     }
 
     /// Shared setup/preferences flow. Callers supply the temporary validation client.
+    /// Auth failures are throttled client-side after five attempts; both the setup and
+    /// preferences connect flows go through here, so neither can hammer the endpoint.
     func connect(using testClient: UniFiClientProtocol, url: URL, apiKey: String, allowSelfSigned: Bool) async throws {
         guard !preferences.isResetting else {
             await testClient.invalidate()
             throw CancellationError()
+        }
+        let now = self.now()
+        if let until = connectRetryAvailableAt, now < until {
+            await testClient.invalidate()
+            throw UniFiError.throttled(retryInSeconds: max(1, Int(until.timeIntervalSince(now))))
         }
         connectionGeneration += 1
         let generation = connectionGeneration
@@ -154,7 +222,15 @@ final class StatusBarController {
         validationClients[generation] = nil
         try Task.checkCancellation()
         guard generation == connectionGeneration else { throw CancellationError() }
-        let siteId = try validation.get()
+        let siteId: String
+        do {
+            siteId = try validation.get()
+        } catch {
+            noteFailedConnectAttempt(error)
+            throw error
+        }
+        failedConnectAttempts = 0
+        connectRetryAvailableAt = nil
         // Once persistence starts, cancellation is not a rollback of already-written credentials.
         try await preferences.save(controllerURL: url.absoluteString, apiKey: apiKey, allowSelfSigned: allowSelfSigned,
                                    isCurrent: { generation == self.connectionGeneration })
@@ -162,6 +238,44 @@ final class StatusBarController {
         guard generation == connectionGeneration else { throw CancellationError() }
         preferences.siteId = siteId
         await reconfigure()
+    }
+
+    /// After five consecutive authentication failures, delay further attempts with a
+    /// small exponential backoff capped at 30 seconds.
+    private func noteFailedConnectAttempt(_ error: Error) {
+        guard case UniFiError.httpError(let code) = error, code == 401 || code == 403 else { return }
+        failedConnectAttempts += 1
+        guard failedConnectAttempts >= 5 else { return }
+        let delay = min(pow(2.0, Double(failedConnectAttempts - 4)), 30.0)
+        connectRetryAvailableAt = now().addingTimeInterval(delay)
+    }
+
+    /// When a connect attempt is throttled, the time the next attempt opens up.
+    var connectRetryDeadline: Date? { connectRetryAvailableAt }
+
+    /// Maps connect-flow errors to user-facing copy. Shared by SetupView and PreferencesView.
+    nonisolated static func connectionErrorMessage(for error: Error) -> String {
+        switch error {
+        case let error as UniFiError:
+            switch error {
+            case .httpError(let code) where code == 401 || code == 403:
+                return "Authentication failed. Check your API key."
+            case .httpError(let code):
+                return "Server returned HTTP \(code). Check your controller URL."
+            case .noSitesFound:
+                return "Connected, but no sites found on this controller."
+            default:
+                return error.errorDescription ?? error.localizedDescription
+            }
+        case let error as CertificateConnectionError:
+            return error.errorDescription ?? error.localizedDescription
+        case is URLError:
+            return "Could not reach the controller. Check the URL and your network connection."
+        case let error as KeychainError:
+            return error.errorDescription ?? error.localizedDescription
+        default:
+            return "Connection failed. Check your URL and network settings."
+        }
     }
 
     @discardableResult
@@ -172,8 +286,13 @@ final class StatusBarController {
         lastManualRefresh = now
         authFailed = false
         let gen = refreshGeneration
-        return Task {
+        return Task { [weak self] in
+            guard let self else { return }
             await refresh(generation: gen)
+            // A manual refresh that succeeds after the loop stopped (auth failure)
+            // must bring polling back; the wake/path handlers already do this.
+            guard gen == refreshGeneration, !Task.isCancelled, !authFailed, pollTask == nil else { return }
+            startPolling()
         }
     }
 
@@ -187,7 +306,9 @@ final class StatusBarController {
             return
         }
         guard generation == refreshGeneration, preferences.automaticConnectionAllowed else { return }
-        // Reconfigure to get a fresh URLSession with a fresh delegate
+        // A name-mismatched self-signed certificate cannot re-pin without a prompt, so
+        // arm exactly one for the fresh delegate the user just asked for.
+        trustPrompt?.arm()
         await reconfigure()
     }
 
@@ -216,6 +337,8 @@ final class StatusBarController {
         authFailed = false
         consecutiveErrors = 0
         successCount = 0
+        failedConnectAttempts = 0
+        connectRetryAvailableAt = nil
         isRefreshing = false
         refreshGeneration += 1
         hasStarted = false
@@ -225,7 +348,7 @@ final class StatusBarController {
     }
 
     private func startPolling() {
-        guard preferences.automaticConnectionAllowed, client != nil else { return }
+        guard !hasTornDown, preferences.automaticConnectionAllowed, client != nil else { return }
         pollTask?.cancel()
         let gen = refreshGeneration
         pollTask = Task { [weak self] in
@@ -241,7 +364,7 @@ final class StatusBarController {
                     return
                 }
                 let delay = self.pollInterval
-                try? await Task.sleep(for: .seconds(delay))
+                try? await self.sleep(.seconds(delay))
             }
         }
     }
@@ -276,10 +399,11 @@ final class StatusBarController {
             guard let self else { return }
             Task { @MainActor in
                 let gen = self.refreshGeneration
-                self.consecutiveErrors = 0
-                // Wait longer for Wi-Fi to reassociate after wake
-                try? await Task.sleep(for: .seconds(8))
-                guard gen == self.refreshGeneration else { return }
+                // Backoff resets on successful refresh only; clearing it here would
+                // let a flapping network poll an unreachable controller at full cadence.
+                // The 8 s wait lets Wi-Fi reassociate after wake before refreshing.
+                try? await self.sleep(.seconds(8))
+                guard gen == self.refreshGeneration, !self.hasTornDown, self.client != nil else { return }
                 await self.refresh(generation: gen)
                 guard gen == self.refreshGeneration else { return }
                 // If still failing, restart normal polling
@@ -297,7 +421,7 @@ final class StatusBarController {
             guard let self, path.status == .satisfied else { return }
             Task { @MainActor in
                 let gen = self.refreshGeneration
-                self.consecutiveErrors = 0
+                guard !self.hasTornDown, self.client != nil else { return }
                 await self.refresh(generation: gen)
                 guard gen == self.refreshGeneration else { return }
                 // If polling had stopped (auth failure), don't restart
@@ -356,6 +480,7 @@ final class StatusBarController {
             if certChanged {
                 Self.logger.warning("Certificate pin mismatch detected — cert may have been renewed")
                 diagnosticsLog.record(.certificate, level: .warning, message: "Certificate pin mismatch detected")
+                consecutiveErrors = min(consecutiveErrors + 1, 4)
                 wifiStatus.markError(.certChanged)
                 await client.resetSiteCache()
                 return
@@ -400,6 +525,7 @@ final class StatusBarController {
             if certChanged {
                 Self.logger.warning("Certificate pin mismatch detected — cert may have been renewed")
                 diagnosticsLog.record(.certificate, level: .warning, message: "Certificate pin mismatch detected")
+                consecutiveErrors = min(consecutiveErrors + 1, 4)
                 wifiStatus.markError(.certChanged)
                 return
             }
@@ -424,16 +550,24 @@ final class StatusBarController {
 
         let me = selfInfo.client
 
+        // Skip the network work for sections the user hid. Hidden sections never display data.
+        let wantWAN = preferences.isSectionEnabled(.internet)
+        let wantVPN = preferences.isSectionEnabled(.vpn)
+        let wantSessions = preferences.isSectionEnabled(.sessionHistory)
+        let wantAP = preferences.isSectionEnabled(.wifi)
+        let wantDevices = wantWAN || wantAP || preferences.isSectionEnabled(.network)
+
         // Parallel batch 1: devices, WAN health, VPN tunnels, session history
-        async let devicesTask = client.fetchDevices(siteId: siteId)
-        async let wanHealthTask = client.fetchWANHealth()
-        async let vpnTask = client.fetchVPNTunnels(siteId: siteId)
+        async let devicesTask: [DeviceDTO]? = wantDevices ? await fetchDevicesLogged(client: client, siteId: siteId) : nil
+        async let wanHealthTask: WANHealth? = wantWAN ? await client.fetchWANHealth() : nil
+        async let vpnTask: [VPNTunnelDTO]? = wantVPN ? await client.fetchVPNTunnels(siteId: siteId) : nil
         async let sessionsTask: [SessionDTO]? = {
-            guard let mac = me.mac else { return nil }
+            // A wired client has no AP session to summarize; skip the request rather than discard it.
+            guard wantSessions, let mac = me.mac, !selfInfo.isWired else { return nil }
             return await client.fetchSessionHistory(mac: mac)
         }()
 
-        let devices = try? await devicesTask
+        let devices = await devicesTask
         let wanHealth = await wanHealthTask
         let tunnels = await vpnTask
         let sessions = await sessionsTask
@@ -454,17 +588,28 @@ final class StatusBarController {
 
         let apId = apDevice?.id
         let gwId = gwDevice?.id
-        async let apStatsTask: APStats? = {
-            guard let apId else { return nil }
-            return await client.fetchAPStats(deviceId: apId, siteId: siteId)
-        }()
-        async let gwStatsTask: GatewayStats? = {
-            guard let gwId else { return nil }
-            return await client.fetchGatewayStats(deviceId: gwId, siteId: siteId)
-        }()
+        let wantAPStats = wantAP && apId != nil
+        let wantGWStats = wantWAN && gwId != nil
 
-        let apStats = await apStatsTask
-        let gwStats = await gwStatsTask
+        let apStats: APStats?
+        let gwStats: GatewayStats?
+        if let apId, let gwId, apId == gwId, wantAPStats || wantGWStats {
+            // Integrated gateways expose the AP as the same device. One payload yields both projections.
+            let snapshot = await client.fetchDeviceStats(deviceId: apId, siteId: siteId)
+            apStats = wantAPStats ? snapshot?.apStats : nil
+            gwStats = wantGWStats ? snapshot?.gatewayStats : nil
+        } else {
+            async let apStatsTask: APStats? = {
+                guard wantAPStats, let apId else { return nil }
+                return await client.fetchAPStats(deviceId: apId, siteId: siteId)
+            }()
+            async let gwStatsTask: GatewayStats? = {
+                guard wantGWStats, let gwId else { return nil }
+                return await client.fetchGatewayStats(deviceId: gwId, siteId: siteId)
+            }()
+            apStats = await apStatsTask
+            gwStats = await gwStatsTask
+        }
 
         guard gen == refreshGeneration, !Task.isCancelled else { return }
         wifiStatus.updateAPStats(apStats)
@@ -472,8 +617,30 @@ final class StatusBarController {
         if selfInfo.isWired { wifiStatus.dataAvailability[.accessPoint] = .notApplicable }
         if devices != nil, gwDevice == nil { wifiStatus.dataAvailability[.gateway] = .notApplicable }
 
+        // A hidden section keeps a disabled marker even though nothing rendered it.
+        if !wantWAN {
+            wifiStatus.dataAvailability[.wan] = .disabled
+            wifiStatus.dataAvailability[.gateway] = .disabled
+        }
+        if !wantVPN { wifiStatus.dataAvailability[.vpn] = .disabled }
+        if !wantSessions { wifiStatus.dataAvailability[.sessions] = .disabled }
+        if !wantAP { wifiStatus.dataAvailability[.accessPoint] = .disabled }
+        if !wantDevices { wifiStatus.dataAvailability[.devices] = .disabled }
+
         // Parallel batch 3: monitoring data (only fetch enabled sections)
         await fetchMonitoringData(client: client, generation: gen)
+    }
+
+    /// Devices fetch with its failure recorded; returns nil so a caller can still render the rest.
+    private func fetchDevicesLogged(client: UniFiClientProtocol, siteId: String) async -> [DeviceDTO]? {
+        do {
+            return try await client.fetchDevices(siteId: siteId)
+        } catch {
+            let detail = "\((error as NSError).domain) code=\((error as NSError).code)"
+            Self.logger.error("Devices fetch failed: \(detail)")
+            diagnosticsLog.record(.connection, level: .error, message: "Devices fetch failed", detail: detail)
+            return nil
+        }
     }
 
     /// Maps network errors to human-readable reasons for the UI.

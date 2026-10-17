@@ -2,6 +2,44 @@
 # Shared bundle assembly functions for UniFiBar build scripts.
 # Source this file: source "$(dirname "$0")/build_common.sh"
 
+# Project paths and version loading for the build entry points. Sets SCRIPT_DIR,
+# PROJECT_DIR, APP_NAME, BUILD_DIR, APP_BUNDLE, APP_VERSION and BUILD_NUMBER in the
+# caller's scope. $1 is the Swift build configuration (debug or release).
+init_build_env() {
+    local config="${1:?build configuration required}"
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+    APP_NAME="UniFiBar"
+    BUILD_DIR="$PROJECT_DIR/.build"
+    APP_BUNDLE="$BUILD_DIR/$config/$APP_NAME.app"
+
+    APP_VERSION="0.0.0"
+    BUILD_NUMBER="0"
+    if [ -f "$PROJECT_DIR/version.env" ]; then
+        # Parse, never source: version.env is tracked, so a pull request can change it.
+        while IFS='=' read -r key value || [ -n "$key" ]; do
+            case "$key" in
+                APP_VERSION) APP_VERSION="$value" ;;
+                BUILD_NUMBER) BUILD_NUMBER="$value" ;;
+            esac
+        done < "$PROJECT_DIR/version.env"
+    fi
+    validate_version_info
+}
+
+# Guard the plist writer against any version value that is not a plain number
+# before it reaches XML, even though init_build_env only parses the file.
+validate_version_info() {
+    if [[ ! "$APP_VERSION" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+        echo "ERROR: APP_VERSION '$APP_VERSION' must look like 1.2.3" >&2
+        exit 1
+    fi
+    if [[ ! "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: BUILD_NUMBER '$BUILD_NUMBER' must be a positive integer" >&2
+        exit 1
+    fi
+}
+
 assemble_app_bundle() {
     local APP_BUNDLE="$1"
     local BINARY="$2"
@@ -39,11 +77,6 @@ assemble_app_bundle() {
     <string>AppIcon</string>
     <key>LSUIElement</key>
     <true/>
-    <key>NSAppTransportSecurity</key>
-    <dict>
-        <key>NSAllowsLocalNetworking</key>
-        <true/>
-    </dict>
     <key>NSLocalNetworkUsageDescription</key>
     <string>UniFiBar needs access to your local network to connect to your UniFi controller.</string>
 </dict>

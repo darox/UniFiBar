@@ -1,0 +1,6 @@
+self-hosted-runner:
+  # Runner-images preview labels. GitHub lists them in the image README but not
+  # in the public runner label list that actionlint validates against.
+  labels:
+    - xcode-27
+    - xcode-27-xlarge

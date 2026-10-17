@@ -8,8 +8,7 @@ func runFixtureUI(id: UUID, output: URL) -> Never {
     // Process-local AX mode, not a change to permission or system VoiceOver settings.
     NSApplication.shared.accessibilitySetValue(true, forAttribute: .init(rawValue: "AXEnhancedUserInterface"))
     Task { @MainActor in
-        do { try await uiCheck(id: id, output: output); exit(0) }
-        catch { print("FAIL: \(error)"); exit(1) }
+        do { try await uiCheck(id: id, output: output); exit(0) } catch { print("FAIL: \(error)"); exit(1) }
     }
     NSApplication.shared.run()
     exit(2)
@@ -224,8 +223,7 @@ func uiCheck(id: UUID, output: URL) async throws {
         try require(clientInputs.count == before, "\(name) rejects invalid URL before client creation")
         try enter("https://controller.invalid/", in: root, label: "Controller URL")
         let trust = try element(root, label: "Allow self-signed certificates")
-        if let control = trust as? NSSwitch { control.performClick(nil) }
-        else { try require(trust.accessibilityPerformPress?() == true, "\(name) self-signed toggle") }
+        if let control = trust as? NSSwitch { control.performClick(nil) } else { try require(trust.accessibilityPerformPress?() == true, "\(name) self-signed toggle") }
         try require(button.accessibilityPerformPress?() == true, "\(name) synthetic submit")
         try await waitFor("\(name) authentication error visible") { hasText(root, "Authentication failed. Check your API key.") }
         try require(clientInputs.count == before + 1, "\(name) creates one injected client")

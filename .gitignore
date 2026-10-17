@@ -11,7 +11,8 @@ unifbar-debug.log
 # Debug scripts with credential access
 Scripts/api_debug.swift
 
-# Agent tooling. Local only, never published.
+# Editor and agent tooling. Local only, never published.
+.vscode/
 .agents/
 .claude/
 tasks/

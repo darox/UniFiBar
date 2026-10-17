@@ -24,6 +24,8 @@ struct PreferencesView: View {
     @State private var connectionTask: Task<Void, Never>?
     @State private var showResetConfirmation = false
     @State private var errorMessage: String?
+    @State private var retryAvailableAt: Date?
+    @State private var retryTask: Task<Void, Never>?
 
     var body: some View {
         Group {
@@ -47,11 +49,14 @@ struct PreferencesView: View {
         .task { await loadExisting() }
         .onDisappear {
             connectionTask?.cancel()
+            retryTask?.cancel()
             isSaving = false
         }
         .confirmationDialog("Reset UniFiBar?", isPresented: $showResetConfirmation) {
             Button("Reset & Forget", role: .destructive) {
                 connectionTask?.cancel()
+                retryTask?.cancel()
+                retryAvailableAt = nil
                 let cleanup = controller.resetConfiguration()
                 Task { await reset(cleanup) }
             }
@@ -78,7 +83,7 @@ struct PreferencesView: View {
                         connectionTask = Task { await save() }
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(controllerURL.isEmpty || apiKey.isEmpty || isSaving)
+                    .disabled(controllerURL.isEmpty || apiKey.isEmpty || isSaving || isRateLimited)
                 }
             } else {
                 LabeledContent("Controller URL", value: controllerURL)
@@ -106,11 +111,21 @@ struct PreferencesView: View {
         } header: {
             Text("Connection")
         } footer: {
-            if let errorMessage = errorMessage ?? controller.preferences.credentialError {
+            if let retryAt = retryAvailableAt, Date() < retryAt {
+                // Live countdown, so the disabled button explains itself and lifts on its own.
+                Text("Too many failed attempts. Try again \(Formatters.relativeTime(from: retryAt)).")
+                    .foregroundStyle(.red)
+            } else if let errorMessage = errorMessage ?? controller.preferences.credentialError {
                 Text(errorMessage)
                     .foregroundStyle(.red)
             }
         }
+    }
+
+    /// Mirrors the controller's auth-throttle deadline so the button re-enables on its own.
+    private var isRateLimited: Bool {
+        guard let retryAt = retryAvailableAt else { return false }
+        return Date() < retryAt
     }
 
     private var siteSection: some View {
@@ -199,6 +214,8 @@ struct PreferencesView: View {
 
     private func revertCredentials() {
         connectionTask?.cancel()
+        retryTask?.cancel()
+        retryAvailableAt = nil
         isSaving = false
         controllerURL = controller.preferences.cachedURL ?? ""
         apiKey = controller.preferences.cachedAPIKey ?? ""
@@ -230,6 +247,17 @@ struct PreferencesView: View {
             errorMessage = message
         case .failed(let error):
             errorMessage = StatusBarController.connectionErrorMessage(for: error)
+            // Mirror the controller's auth-throttle deadline in local state so the button
+            // re-enables itself while this window stays open.
+            guard let deadline = controller.connectRetryDeadline else { return }
+            retryTask?.cancel()
+            retryAvailableAt = deadline
+            let remaining = max(0, deadline.timeIntervalSinceNow)
+            retryTask = Task {
+                do { try await Task.sleep(for: .seconds(remaining)) } catch { return }
+                retryAvailableAt = nil
+                errorMessage = nil
+            }
         }
     }
 

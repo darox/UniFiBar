@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Testing
 @testable import UniFiBar
 
@@ -47,13 +48,22 @@ struct StatusBarControllerTests {
             clientsOnSameAP: 5
         )
         var devicesToReturn: [DeviceDTO] = [
-            DeviceDTO(id: "d1", macAddress: "11:22:33", name: "U7 Pro", model: "U7-Pro", state: "ONLINE", firmwareUpdatable: nil, features: nil, firmwareVersion: nil, ipAddress: nil),
-            DeviceDTO(id: "d2", macAddress: "44:55:66", name: "U7 In-Wall", model: nil, state: "ONLINE", firmwareUpdatable: nil, features: nil, firmwareVersion: nil, ipAddress: nil),
+            DeviceDTO(id: "d1", macAddress: "11:22:33", name: "U7 Pro", model: "U7-Pro", state: "ONLINE", firmwareUpdatable: nil, features: nil),
+            DeviceDTO(id: "d2", macAddress: "44:55:66", name: "U7 In-Wall", model: nil, state: "ONLINE", firmwareUpdatable: nil, features: nil)
         ]
         var wanHealthToReturn = WANHealth(ispName: "Comcast", wanIP: "203.0.113.1", status: "ok", latencyMs: 12, availability: 99.9, drops: 0, rxBytesRate: 1_500_000, txBytesRate: 800_000, speedTest: nil)
         var vpnTunnelsToReturn: [VPNTunnelDTO]? = nil
-        var apStatsToReturn = APStats(uptimeSec: 3600, cpuUtilizationPct: 5.0, memoryUtilizationPct: 30.0)
-        var gatewayStatsToReturn = GatewayStats(uptimeSec: 86400, cpuUtilizationPct: 12.0, memoryUtilizationPct: 45.0, uplinkTxRateBps: nil, uplinkRxRateBps: nil)
+        var apStatsToReturn = APStats(cpuUtilizationPct: 5.0, memoryUtilizationPct: 30.0)
+        var gatewayStatsToReturn = GatewayStats(uptimeSec: 86400, cpuUtilizationPct: 12.0, memoryUtilizationPct: 45.0)
+        private(set) var apStatsFetchCount = 0
+        private(set) var gatewayStatsFetchCount = 0
+        private(set) var deviceStatsFetchCount = 0
+        private(set) var sessionFetchCount = 0
+        private(set) var devicesFetchCount = 0
+        private(set) var wanFetchCount = 0
+        private(set) var vpnFetchCount = 0
+        func setDevices(_ devices: [DeviceDTO]) { devicesToReturn = devices }
+        func setSelfInfo(_ info: SelfInfo) { selfInfoToReturn = info }
         var sessionsToReturn: [SessionDTO]? = nil
         var ddnsResult: (data: [DDNSStatusDTO]?, errorDetail: String?) = (nil, nil)
         var pfResult: (data: [PortForwardDTO]?, errorDetail: String?) = (nil, nil)
@@ -61,10 +71,13 @@ struct StatusBarControllerTests {
         var certChangedFlag: Bool = false
 
         private var _fetchSiteError: Error? = nil
+        private var scriptedSiteErrors: [Error?]? = nil
         private var _fetchSelfError: Error? = nil
         private var _fetchDevicesError: Error? = nil
 
         func setFetchSiteError(_ error: Error?) { _fetchSiteError = error }
+        /// Consumed one entry per fetchSiteId call; the fixed error applies once the script ends.
+        func setScriptedSiteErrors(_ script: [Error?]) { scriptedSiteErrors = script }
         func setFetchSelfError(_ error: Error?) { _fetchSelfError = error }
         func setFetchDevicesError(_ error: Error?) { _fetchDevicesError = error }
         func setCertChanged(_ flag: Bool) { certChangedFlag = flag }
@@ -73,6 +86,11 @@ struct StatusBarControllerTests {
             siteFetchCount += 1
             siteFetches.continuation.yield(())
             await waitIfPaused(.site)
+            if scriptedSiteErrors?.isEmpty == false {
+                let outcome = scriptedSiteErrors?.removeFirst() ?? nil
+                if let e = outcome { throw e }
+                return siteIdToReturn
+            }
             if let e = _fetchSiteError { throw e }
             return siteIdToReturn
         }
@@ -84,19 +102,36 @@ struct StatusBarControllerTests {
         }
 
         func fetchDevices(siteId: String) async throws -> [DeviceDTO] {
+            devicesFetchCount += 1
             if let e = _fetchDevicesError { throw e }
             return devicesToReturn
         }
 
-        func fetchVPNTunnels(siteId: String) async -> [VPNTunnelDTO]? { vpnTunnelsToReturn }
-        func fetchWANHealth() async -> WANHealth? { wanHealthToReturn }
-        func fetchGatewayStats(deviceId: String, siteId: String) async -> GatewayStats? { gatewayStatsToReturn }
-        func fetchAPStats(deviceId: String, siteId: String) async -> APStats? { apStatsToReturn }
+        func fetchVPNTunnels(siteId: String) async -> [VPNTunnelDTO]? {
+            vpnFetchCount += 1
+            return vpnTunnelsToReturn
+        }
+        func fetchWANHealth() async -> WANHealth? {
+            wanFetchCount += 1
+            return wanHealthToReturn
+        }
+        func fetchGatewayStats(deviceId: String, siteId: String) async -> GatewayStats? {
+            gatewayStatsFetchCount += 1
+            return gatewayStatsToReturn
+        }
+        func fetchAPStats(deviceId: String, siteId: String) async -> APStats? {
+            apStatsFetchCount += 1
+            return apStatsToReturn
+        }
+        func fetchDeviceStats(deviceId: String, siteId: String) async -> DeviceStatsSnapshot? {
+            deviceStatsFetchCount += 1
+            return DeviceStatsSnapshot(apStats: apStatsToReturn, gatewayStats: gatewayStatsToReturn)
+        }
         func fetchSessionHistory(mac: String) async -> [SessionDTO]? {
+            sessionFetchCount += 1
             if waitForSessionCancellation {
                 sessionStarted.continuation.yield(())
-                do { try await Task.sleep(for: .seconds(60)) }
-                catch { sessionWasCancelled = Task.isCancelled }
+                do { try await Task.sleep(for: .seconds(60)) } catch { sessionWasCancelled = Task.isCancelled }
             }
             return sessionsToReturn
         }
@@ -121,9 +156,16 @@ struct StatusBarControllerTests {
         try await check(defaults)
     }
 
-    private func makeController(fake: FakeClient, defaults: UserDefaults) -> StatusBarController {
+    private func makeController(
+        fake: FakeClient,
+        defaults: UserDefaults,
+        sleep: (@Sendable (Duration) async throws -> Void)? = nil,
+        now: (@Sendable () -> Date)? = nil
+    ) -> StatusBarController {
         StatusBarController(
             fixturePreferences: PreferencesManager(defaults: defaults, keychain: FakeKeychain()),
+            sleep: sleep,
+            now: now,
             clientLoader: { fake }
         )
     }
@@ -161,7 +203,6 @@ struct StatusBarControllerTests {
             #expect(poll.isCancelled)
             #expect(controller.pollTask == nil)
             #expect(await first.siteFetchCount == 1)
-            #expect(controller.wifiStatus.isConnected)
             #expect(prefs.isConfigured)
             #expect(!controller.hasSystemObservers)
             #expect(controller.updateChecker.checkNow() == nil)
@@ -284,7 +325,7 @@ struct StatusBarControllerTests {
             await controller.resetCertPin()
             #expect(loads == 1)
             #expect(await fake.invalidationCount == 0)
-            #expect(controller.diagnosticsLog.recentEvents.first?.level == .error)
+            #expect(controller.diagnosticsLog.recentEvents(limit: 1).first?.level == .error)
             controller.tearDown()
         }
     }
@@ -637,6 +678,398 @@ struct StatusBarControllerTests {
             let controller = makeController(fake: FakeClient(), defaults: defaults)
             controller.preferences.setPollInterval(30)
             #expect(controller.currentPollInterval == 30)
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func successfulPinResetReconfiguresWithFreshClient() async throws {
+        try await withDefaults { defaults in
+            let first = FakeClient()
+            let second = FakeClient()
+            var loads = 0
+            let controller = StatusBarController(
+                fixturePreferences: PreferencesManager(defaults: defaults, keychain: FakeKeychain())
+            ) {
+                loads += 1
+                return loads == 1 ? first : second
+            }
+            defer { controller.tearDown() }
+
+            await controller.start()
+            controller.stopPolling()
+            await controller.resetCertPin()
+
+            #expect(loads == 2)
+            #expect(await first.invalidationCount == 1)
+            #expect(await second.invalidationCount == 0)
+            #expect(controller.pollTask != nil)
+            #expect(controller.wifiStatus.isConnected)
+            #expect(controller.wifiStatus.errorState == nil)
+        }
+    }
+
+    // MARK: - Connect throttle
+
+    @Test(.timeLimit(.minutes(1)))
+    func connectIsThrottledAfterFiveAuthFailures() async throws {
+        try await withDefaults { defaults in
+            let current = OSAllocatedUnfairLock(initialState: Date(timeIntervalSince1970: 1_000_000))
+            let controller = makeController(fake: FakeClient(), defaults: defaults, now: { current.withLock { $0 } })
+            defer { controller.tearDown() }
+            let url = try #require(URL(string: "https://fixture.invalid"))
+            let authError = UniFiError.httpError(statusCode: 401)
+
+            for attempt in 1...5 {
+                let failing = FakeClient()
+                await failing.setFetchSiteError(authError)
+                await #expect(throws: authError) {
+                    try await controller.connect(using: failing, url: url, apiKey: "k", allowSelfSigned: false)
+                }
+                #expect(await failing.invalidationCount == 1)
+                #expect(controller.connectRetryDeadline == nil || attempt >= 5)
+            }
+            #expect(controller.connectRetryDeadline != nil)
+
+            let blocked = FakeClient()
+            await #expect(throws: UniFiError.throttled(retryInSeconds: 2)) {
+                try await controller.connect(using: blocked, url: url, apiKey: "k", allowSelfSigned: false)
+            }
+            #expect(await blocked.siteFetchCount == 0)
+            #expect(await blocked.invalidationCount == 1)
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func throttleLiftsAfterDeadlineAndSuccessResetsCounter() async throws {
+        try await withDefaults { defaults in
+            let current = OSAllocatedUnfairLock(initialState: Date(timeIntervalSince1970: 1_000_000))
+            let controller = StatusBarController(
+                fixturePreferences: PreferencesManager(defaults: defaults, keychain: FakeKeychain()),
+                now: { current.withLock { $0 } },
+                clientLoader: { FakeClient() }
+            )
+            defer { controller.tearDown() }
+            let url = try #require(URL(string: "https://fixture.invalid"))
+            let authError = UniFiError.httpError(statusCode: 403)
+
+            for _ in 1...5 {
+                let failing = FakeClient()
+                await failing.setFetchSiteError(authError)
+                await #expect(throws: authError) {
+                    try await controller.connect(using: failing, url: url, apiKey: "k", allowSelfSigned: false)
+                }
+            }
+            #expect(controller.connectRetryDeadline != nil)
+
+            current.withLock { $0.addTimeInterval(31) }
+            try await controller.connect(using: FakeClient(), url: url, apiKey: "k", allowSelfSigned: false)
+            #expect(controller.connectRetryDeadline == nil)
+
+            // The next failure starts a fresh count instead of resuming the backoff.
+            let failing = FakeClient()
+            await failing.setFetchSiteError(authError)
+            await #expect(throws: authError) {
+                try await controller.connect(using: failing, url: url, apiKey: "k", allowSelfSigned: false)
+            }
+            #expect(controller.connectRetryDeadline == nil)
+            controller.tearDown()
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func resetClearsTheConnectThrottle() async throws {
+        try await withDefaults { defaults in
+            let current = OSAllocatedUnfairLock(initialState: Date(timeIntervalSince1970: 1_000_000))
+            let controller = StatusBarController(
+                fixturePreferences: PreferencesManager(defaults: defaults, keychain: FakeKeychain()),
+                now: { current.withLock { $0 } },
+                clientLoader: { FakeClient() }
+            )
+            defer { controller.tearDown() }
+            let url = try #require(URL(string: "https://fixture.invalid"))
+            let authError = UniFiError.httpError(statusCode: 401)
+
+            for _ in 1...5 {
+                let failing = FakeClient()
+                await failing.setFetchSiteError(authError)
+                await #expect(throws: authError) {
+                    try await controller.connect(using: failing, url: url, apiKey: "k", allowSelfSigned: false)
+                }
+            }
+            #expect(controller.connectRetryDeadline != nil)
+
+            _ = controller.resetState()
+            #expect(controller.connectRetryDeadline == nil)
+
+            // The fresh attempt lands inside the old throttle window and must reach the network.
+            let fresh = FakeClient()
+            try await controller.connect(using: fresh, url: url, apiKey: "k", allowSelfSigned: false)
+            #expect(await fresh.siteFetchCount == 1)
+        }
+    }
+
+    @Test func connectionErrorMessageMapsAllKnownErrors() {
+        #expect(StatusBarController.connectionErrorMessage(for: UniFiError.httpError(statusCode: 401)) ==
+                "Authentication failed. Check your API key.")
+        #expect(StatusBarController.connectionErrorMessage(for: UniFiError.httpError(statusCode: 403)) ==
+                "Authentication failed. Check your API key.")
+        #expect(StatusBarController.connectionErrorMessage(for: UniFiError.httpError(statusCode: 500)) ==
+                "Server returned HTTP 500. Check your controller URL.")
+        #expect(StatusBarController.connectionErrorMessage(for: UniFiError.noSitesFound) ==
+                "Connected, but no sites found on this controller.")
+        #expect(StatusBarController.connectionErrorMessage(for: UniFiError.throttled(retryInSeconds: 4)) ==
+                "Too many failed attempts. Wait 4s before retrying.")
+        #expect(StatusBarController.connectionErrorMessage(for: UniFiError.selfNotFound) ==
+                "This Mac was not found in the selected site's client list.")
+        #expect(StatusBarController.connectionErrorMessage(for: CertificateConnectionError.changedKey) ==
+                CertificateConnectionError.changedKey.errorDescription)
+        #expect(StatusBarController.connectionErrorMessage(for: URLError(.cannotConnectToHost)) ==
+                "Could not reach the controller. Check the URL and your network connection.")
+        #expect(StatusBarController.connectionErrorMessage(for: CocoaError(.coderInvalidValue)) ==
+                "Connection failed. Check your URL and network settings.")
+    }
+
+    // MARK: - Poll loop lifecycle
+    //
+    // The injected sleep records each requested delay; the poll loop cycles as fast as
+    // the fake client answers, so every assertion below is deterministic.
+
+    @Test(.timeLimit(.minutes(1)))
+    func pollLoopBacksOffExponentiallyAndCaps() async throws {
+        try await withDefaults { defaults in
+            let fake = FakeClient()
+            await fake.setFetchSiteError(UniFiError.httpError(statusCode: 500))
+            let recorded = AsyncStream<Duration>.makeStream()
+            let controller = makeController(fake: fake, defaults: defaults) { recorded.continuation.yield($0) }
+            defer { controller.tearDown() }
+            controller.preferences.setPollInterval(30)
+            var delays = recorded.stream.makeAsyncIterator()
+
+            await controller.reconfigure()
+            #expect(controller.pollTask != nil)
+            #expect(controller.consecutiveErrorCount == 1)
+
+            let d1 = await delays.next()
+            let d2 = await delays.next()
+            let d3 = await delays.next()
+            let d4 = await delays.next()
+            #expect(d1 == .seconds(120))
+            #expect(d2 == .seconds(240))
+            #expect(d3 == .seconds(300))
+            #expect(d4 == .seconds(300))
+            #expect(controller.consecutiveErrorCount == 4)
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func pollLoopBackoffResetsAfterSuccess() async throws {
+        try await withDefaults { defaults in
+            let fake = FakeClient()
+            // reconfigure fails, the first poll iterations fail, then recovery succeeds.
+            // The script is actor-ordered, so the loop cannot race the error change.
+            let transient = UniFiError.httpError(statusCode: 500)
+            await fake.setScriptedSiteErrors([transient, transient, nil])
+            let recorded = AsyncStream<Duration>.makeStream()
+            let controller = makeController(fake: fake, defaults: defaults) { recorded.continuation.yield($0) }
+            defer { controller.tearDown() }
+            controller.preferences.setPollInterval(30)
+            var delays = recorded.stream.makeAsyncIterator()
+
+            await controller.reconfigure()
+            #expect(await delays.next() == .seconds(120))
+            #expect(await delays.next() == .seconds(30))
+            #expect(controller.consecutiveErrorCount == 0)
+            #expect(controller.wifiStatus.isConnected)
+            #expect(controller.wifiStatus.errorState == nil)
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func certificatePinMismatchBacksOffInsteadOfPollingAtFullRate() async throws {
+        try await withDefaults { defaults in
+            let fake = FakeClient()
+            await fake.setFetchSiteError(URLError(.serverCertificateUntrusted))
+            await fake.setCertChanged(true)
+            let recorded = AsyncStream<Duration>.makeStream()
+            let controller = makeController(fake: fake, defaults: defaults) { recorded.continuation.yield($0) }
+            defer { controller.tearDown() }
+            controller.preferences.setPollInterval(30)
+            var delays = recorded.stream.makeAsyncIterator()
+
+            await controller.reconfigure()
+            #expect(controller.wifiStatus.errorState == .certChanged)
+
+            let d1 = await delays.next()
+            let d2 = await delays.next()
+            #expect(d1 == .seconds(120))
+            #expect(d2 == .seconds(240))
+            #expect(controller.wifiStatus.errorState == .certChanged)
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func pollLoopStopsAfterAuthFailure() async throws {
+        try await withDefaults { defaults in
+            let fake = FakeClient()
+            await fake.setFetchSiteError(UniFiError.httpError(statusCode: 401))
+            let controller = makeController(fake: fake, defaults: defaults)
+            defer { controller.tearDown() }
+
+            await controller.reconfigure()
+            let poll = try #require(controller.pollTask)
+            await poll.value
+
+            #expect(controller.pollTask == nil)
+            #expect(controller.wifiStatus.errorState == .invalidAPIKey(httpCode: 401))
+            #expect(controller.consecutiveErrorCount == 0)
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func manualRefreshRestartsPollingAfterAuthFailureRecovery() async throws {
+        try await withDefaults { defaults in
+            let fake = FakeClient()
+            await fake.setFetchSiteError(UniFiError.httpError(statusCode: 403))
+            let controller = makeController(fake: fake, defaults: defaults) { _ in }
+            defer { controller.tearDown() }
+
+            await controller.reconfigure()
+            if let poll = controller.pollTask { await poll.value }
+            #expect(controller.pollTask == nil)
+
+            await fake.setFetchSiteError(nil)
+            let manual = try #require(controller.refreshNow())
+            await manual.value
+
+            #expect(controller.pollTask != nil)
+            #expect(controller.wifiStatus.isConnected)
+            #expect(controller.wifiStatus.errorState == nil)
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func tearDownDuringInFlightRefreshDiscardsResults() async throws {
+        try await withDefaults { defaults in
+            let fake = FakeClient()
+            await fake.pauseAt(.selfInfo)
+            let controller = makeController(fake: fake, defaults: defaults)
+
+            await controller.start()
+            let poll = try #require(controller.pollTask)
+            var paused = fake.pausedFetches.stream.makeAsyncIterator()
+            await paused.next()
+
+            controller.tearDown()
+            await fake.resume()
+            await poll.value
+
+            #expect(controller.pollTask == nil)
+            #expect(controller.wifiStatus.isConnected == false)
+            #expect(controller.wifiStatus.errorState == nil)
+        }
+    }
+
+    @Test func sharedAPAndGatewayDeviceIsFetchedOnce() async {
+        await withDefaults { defaults in
+            let fake = FakeClient()
+            // One integrated device is both this Mac's AP and the gateway.
+            await fake.setDevices([
+                DeviceDTO(id: "shared", macAddress: "11:22:33", name: "Dream Router", model: "UDR",
+                          state: "ONLINE", firmwareUpdatable: nil, features: ["gateway"])
+            ])
+            let controller = makeController(fake: fake, defaults: defaults)
+            await refresh(controller)
+
+            #expect(await fake.deviceStatsFetchCount == 1)
+            #expect(await fake.apStatsFetchCount == 0)
+            #expect(await fake.gatewayStatsFetchCount == 0)
+            #expect(controller.wifiStatus.apCPU == 5.0)
+            #expect(controller.wifiStatus.gatewayCPU == 12.0)
+            controller.tearDown()
+        }
+    }
+
+    @Test func wiredClientDoesNotRequestSessionHistory() async {
+        await withDefaults { defaults in
+            let fake = FakeClient()
+            let wired = V2ClientDTO(ip: "192.168.1.5", mac: "aa:bb:cc", hostname: nil, displayName: "MacBook",
+                                    signal: nil, rssi: nil, noise: nil, satisfaction: nil,
+                                    wifiExperienceScore: nil, wifiExperienceAverage: nil,
+                                    wifiTxRetriesPercentage: nil, channel: nil, channelWidth: nil,
+                                    radioProto: nil, radio: nil, essid: nil, apMac: nil,
+                                    lastUplinkName: nil, rxRate: nil, txRate: nil, rxBytes: nil,
+                                    txBytes: nil, uptime: nil, mimo: nil, roamCount: nil, ccq: nil, gwMac: nil)
+            await fake.setSelfInfo(SelfInfo(client: wired, totalClients: 3, clientsOnSameAP: 1))
+            let controller = makeController(fake: fake, defaults: defaults)
+            await refresh(controller)
+
+            #expect(await fake.sessionFetchCount == 0)
+            #expect(controller.wifiStatus.dataAvailability[.sessions] == .notApplicable)
+            controller.tearDown()
+        }
+    }
+
+    @Test func credentialFlowValidatesFirstAndTrimsTheKey() async {
+        await withDefaults { defaults in
+            let controller = makeController(fake: FakeClient(), defaults: defaults)
+            var built = 0
+
+            let invalid = await CredentialFlow.connect(
+                controller: controller, urlString: "not a url", apiKey: " key ", allowSelfSigned: false
+            ) { _, _, _ in
+                built += 1
+                return FakeClient()
+            }
+            guard case .urlInvalid = invalid else {
+                Issue.record("expected urlInvalid, got \(invalid)")
+                return
+            }
+            #expect(built == 0)
+
+            let connected = await CredentialFlow.connect(
+                controller: controller, urlString: "https://controller.invalid", apiKey: " key ", allowSelfSigned: false
+            ) { url, key, selfSigned in
+                built += 1
+                #expect(url.absoluteString == "https://controller.invalid")
+                #expect(key == "key")
+                #expect(selfSigned == false)
+                return FakeClient()
+            }
+            guard case .connected = connected else {
+                Issue.record("expected connected, got \(connected)")
+                return
+            }
+            #expect(built == 1)
+            #expect(controller.preferences.cachedAPIKey == "key")
+
+            let poll = controller.pollTask
+            controller.tearDown()
+            await poll?.value
+        }
+    }
+
+    @Test func hiddenCoreSectionsSkipTheirRequests() async {
+        await withDefaults { defaults in
+            let fake = FakeClient()
+            let prefs = PreferencesManager(defaults: defaults, keychain: FakeKeychain())
+            for section in [MenuSection.internet, .vpn, .sessionHistory, .wifi, .network] {
+                prefs.setSectionEnabled(section, enabled: false)
+            }
+            let controller = StatusBarController(fixturePreferences: prefs, clientLoader: { fake })
+            await refresh(controller)
+
+            #expect(await fake.devicesFetchCount == 0)
+            #expect(await fake.wanFetchCount == 0)
+            #expect(await fake.vpnFetchCount == 0)
+            #expect(await fake.sessionFetchCount == 0)
+            #expect(await fake.apStatsFetchCount == 0)
+            #expect(await fake.gatewayStatsFetchCount == 0)
+            #expect(controller.wifiStatus.dataAvailability[.wan] == .disabled)
+            #expect(controller.wifiStatus.dataAvailability[.vpn] == .disabled)
+            #expect(controller.wifiStatus.dataAvailability[.sessions] == .disabled)
+            #expect(controller.wifiStatus.dataAvailability[.accessPoint] == .disabled)
+            #expect(controller.wifiStatus.dataAvailability[.devices] == .disabled)
+            controller.tearDown()
         }
     }
 }

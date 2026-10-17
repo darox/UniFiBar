@@ -1,0 +1,29 @@
+# SwiftLint gate. Runs from Scripts/check.sh and CI when swiftlint is installed.
+# Rule of the house: the tree stays green. Add a rule only when the tree passes
+# it today; document style choices under disabled_rules instead.
+
+excluded:
+  - .build
+
+disabled_rules:
+  # Long V2ClientDTO literals in tests are deliberate fixtures.
+  - line_length
+  # Short names (ch, pf, ms, ip) mirror UniFi payload fields.
+  - identifier_name
+  # V2ClientDTO and DTO-suffixed names are deliberate domain vocabulary.
+  - type_name
+  # House style writes "= nil" explicitly on optionals.
+  - implicit_optional_initialization
+  # Known-large types and files; shrinking them is planned work, not lint noise.
+  - type_body_length
+  - function_body_length
+  - file_length
+  - cyclomatic_complexity
+  - nesting
+  - large_tuple
+  - function_parameter_count
+  # TODO comments are tracked work markers, not violations.
+  - todo
+  # House style prefers the lossless String(decoding:as:) initializer; the
+  # JSON it decodes is always valid UTF-8, so failable handling would be dead code.
+  - optional_data_string_conversion

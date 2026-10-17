@@ -34,6 +34,42 @@ struct ResponseLimitTests {
         #expect(bytes.reads.withLock { $0 } == (declaredLength > 4 ? 0 : 5))
     }
 
+    @Test func downloadDelegateAdoptsTheFileOutOfTheSystemTempLocation() throws {
+        let source = FileManager.default.temporaryDirectory
+            .appendingPathComponent("unifibar-fixture-\(UUID().uuidString)")
+        try Data([1, 2, 3, 4]).write(to: source)
+
+        let adopted = try CappedDownloadDelegate.adoptDownload(at: source)
+        defer { try? FileManager.default.removeItem(at: adopted) }
+
+        #expect(!FileManager.default.fileExists(atPath: source.path))
+        #expect(try Data(contentsOf: adopted) == Data([1, 2, 3, 4]))
+    }
+
+    @Test func downloadDelegateCancelsTheTaskWhenBodyExceedsCap() async throws {
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let url = try #require(URL(string: "https://fixture.invalid"))
+        let task = session.downloadTask(with: URLRequest(url: url))
+        let delegate = CappedDownloadDelegate(limit: 100, forwardingTo: SameOriginRedirectDelegate())
+
+        delegate.urlSession(session, downloadTask: task, didWriteData: 50,
+                            totalBytesWritten: 50, totalBytesExpectedToWrite: -1)
+        #expect(!delegate.exceededLimit)
+
+        delegate.urlSession(session, downloadTask: task, didWriteData: 60,
+                            totalBytesWritten: 110, totalBytesExpectedToWrite: -1)
+        #expect(delegate.exceededLimit)
+
+        let advertised = URLSession(configuration: .ephemeral)
+        defer { advertised.invalidateAndCancel() }
+        let advertisedTask = advertised.downloadTask(with: URLRequest(url: url))
+        let advertisedDelegate = CappedDownloadDelegate(limit: 100, forwardingTo: SameOriginRedirectDelegate())
+        advertisedDelegate.urlSession(advertised, downloadTask: advertisedTask, didWriteData: 0,
+                                      totalBytesWritten: 0, totalBytesExpectedToWrite: 101)
+        #expect(advertisedDelegate.exceededLimit)
+    }
+
     @Test(arguments: [0, 4])
     func acceptsEmptyAndExactLimit(count: Int) async throws {
         let result = try await UniFiClient.boundedResponseData(Bytes(count: count), response: response(), limit: 4)

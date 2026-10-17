@@ -1,21 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-APP_NAME="UniFiBar"
-BUILD_DIR="$PROJECT_DIR/.build"
-APP_BUNDLE="$BUILD_DIR/release/$APP_NAME.app"
-
-# Source version info (with defaults)
-APP_VERSION="0.0.0"
-BUILD_NUMBER="0"
-if [ -f "$PROJECT_DIR/version.env" ]; then
-    source "$PROJECT_DIR/version.env"
-fi
-
-# Source shared bundle assembly
-source "$SCRIPT_DIR/build_common.sh"
+# Shared paths, version info and bundle assembly
+source "$(dirname "$0")/build_common.sh"
+init_build_env release
 
 echo "==> Building $APP_NAME (release)..."
 cd "$PROJECT_DIR"
@@ -29,8 +17,21 @@ fi
 
 assemble_app_bundle "$APP_BUNDLE" "$BINARY" "$PROJECT_DIR" "$BUILD_DIR"
 
-echo "==> Signing (ad-hoc)..."
-codesign --force --sign - "$APP_BUNDLE"
+echo "==> Signing (ad-hoc, with entitlements)..."
+# Xcode placeholders like $(AppIdentifierPrefix) only resolve for provisioning-profile
+# builds. In an ad-hoc signature the placeholder stays literal, macOS rejects the
+# entitlement, and launchd refuses to start the bundle (verified on macOS 27.2).
+ENTITLEMENTS="$PROJECT_DIR/UniFiBar.entitlements"
+if [ -f "$ENTITLEMENTS" ]; then
+    if grep -q '[$](' "$ENTITLEMENTS"; then
+        echo "ERROR: $ENTITLEMENTS contains an unresolved \$() placeholder; ad-hoc signing cannot expand it" >&2
+        exit 1
+    fi
+    codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_BUNDLE"
+else
+    echo "ERROR: $ENTITLEMENTS not found; refusing to sign without entitlements"
+    exit 1
+fi
 
 echo "==> Done! App bundle at: $APP_BUNDLE"
 echo "    Version: $APP_VERSION ($BUILD_NUMBER)"

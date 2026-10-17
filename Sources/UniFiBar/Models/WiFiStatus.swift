@@ -44,6 +44,7 @@ final class WiFiStatus {
     var recentlyRoamed: Bool = false
     var roamedFrom: String? = nil
     private var roamCyclesRemaining: Int = 0
+    private var previousAPKey: String? = nil
     private var previousAPName: String? = nil
 
     // Trend indicators
@@ -183,44 +184,69 @@ final class WiFiStatus {
 
     // MARK: - Display Properties
 
-    var qualityLabel: String {
-        guard let satisfaction else { return "Unknown" }
-        switch satisfaction {
-        case 80...100: return "Excellent"
-        case 50..<80: return "Good"
-        case 20..<50: return "Fair"
-        default: return "Poor"
+    /// One banding of the satisfaction score, so label, color, and icon cannot disagree.
+    enum QualityBand: Sendable {
+        case excellent, good, fair, poor, unknown
+
+        init(_ satisfaction: Int?) {
+            switch satisfaction {
+            case .some(80...): self = .excellent
+            case .some(50..<80): self = .good
+            case .some(20..<50): self = .fair
+            case .some: self = .poor
+            case .none: self = .unknown
+            }
         }
+
+        var label: String {
+            switch self {
+            case .excellent: "Excellent"
+            case .good: "Good"
+            case .fair: "Fair"
+            case .poor: "Poor"
+            case .unknown: "Unknown"
+            }
+        }
+
+        var color: Color {
+            switch self {
+            case .excellent: .green
+            case .good: .yellow
+            case .fair, .poor: .red
+            case .unknown: .gray
+            }
+        }
+
+        var isBelowGood: Bool { self == .fair || self == .poor }
     }
+
+    var qualityBand: QualityBand { QualityBand(satisfaction) }
+    var qualityLabel: String { qualityBand.label }
 
     var statusBarColor: Color {
         switch errorState {
-        case .controllerUnreachable(_): return .orange
-        case .invalidAPIKey(_): return .red
+        case .controllerUnreachable: return .orange
+        case .invalidAPIKey: return .red
         case .notConnected: return .gray
         case .certChanged: return .orange
         case nil: break
         }
         if isConnected && isWired { return .blue }
-        guard isConnected, let satisfaction else { return .gray }
-        switch satisfaction {
-        case 80...100: return .green
-        case 50..<80: return .yellow
-        default: return .red
-        }
+        guard isConnected else { return .gray }
+        return qualityBand.color
     }
 
     var statusBarSymbol: String {
         switch errorState {
-        case .controllerUnreachable(_): return "wifi.exclamationmark"
-        case .invalidAPIKey(_): return "lock.shield"
+        case .controllerUnreachable: return "wifi.exclamationmark"
+        case .invalidAPIKey: return "lock.shield"
         case .notConnected: return "wifi.slash"
         case .certChanged: return "lock.shield"
         case nil: break
         }
         guard isConnected else { return "wifi.slash" }
         if isWired { return "cable.connector.horizontal" }
-        guard let satisfaction, satisfaction >= 50 else { return "wifi.exclamationmark" }
+        guard !qualityBand.isBelowGood, satisfaction != nil else { return "wifi.exclamationmark" }
         return "wifi"
     }
 
@@ -252,23 +278,17 @@ final class WiFiStatus {
         return String(format: "%.1f%%", pct)
     }
 
-    var formattedAPLoad: String? {
-        guard let cpu = apCPU, let mem = apMemory else { return nil }
-        return "CPU \(Int(cpu))% · Mem \(Int(mem))%"
-    }
+    var formattedAPLoad: String? { Self.formattedLoad(cpu: apCPU, memory: apMemory) }
+    var formattedGatewayLoad: String? { Self.formattedLoad(cpu: gatewayCPU, memory: gatewayMemory) }
 
-    var formattedGatewayLoad: String? {
-        guard let cpu = gatewayCPU, let mem = gatewayMemory else { return nil }
-        return "CPU \(Int(cpu))% · Mem \(Int(mem))%"
+    private static func formattedLoad(cpu: Double?, memory: Double?) -> String? {
+        guard let cpu, let memory else { return nil }
+        return "CPU \(Int(cpu))% · Mem \(Int(memory))%"
     }
 
     var formattedGatewayUptime: String? {
         guard let secs = gatewayUptime, secs > 0 else { return nil }
-        let days = secs / 86400
-        let hours = (secs % 86400) / 3600
-        if days > 0 { return "\(days)d \(hours)h" }
-        let minutes = (secs % 3600) / 60
-        return "\(hours)h \(minutes)m"
+        return Formatters.duration(seconds: secs)
     }
 
     var formattedWANThroughput: String? {
@@ -317,10 +337,7 @@ final class WiFiStatus {
 
     var formattedUptime: String {
         guard let uptime else { return "—" }
-        let hours = uptime / 3600
-        let minutes = (uptime % 3600) / 60
-        if hours > 0 { return "\(hours)h \(minutes)m" }
-        return "\(minutes)m"
+        return Formatters.duration(seconds: uptime)
     }
 
     var signalDescription: String {
@@ -376,11 +393,13 @@ final class WiFiStatus {
         previousSatisfaction = newSat
         satisfaction = newSat
 
-        // Roam detection
+        // Roam detection keys on the AP MAC (stable identity) and falls back
+        // to the uplink name when the MAC is missing.
         let newAPName = client.lastUplinkName
-        if let prev = previousAPName, let current = newAPName, prev != current {
+        let newAPKey = client.apMac?.lowercased() ?? newAPName?.lowercased()
+        if let prevKey = previousAPKey, let key = newAPKey, prevKey != key {
             recentlyRoamed = true
-            roamedFrom = prev
+            roamedFrom = previousAPName ?? prevKey
             roamCyclesRemaining = 2
         } else if roamCyclesRemaining > 0 {
             roamCyclesRemaining -= 1
@@ -389,6 +408,7 @@ final class WiFiStatus {
                 roamedFrom = nil
             }
         }
+        previousAPKey = newAPKey
         previousAPName = newAPName
         apName = newAPName
 
@@ -535,6 +555,7 @@ final class WiFiStatus {
         recentlyRoamed = false
         roamedFrom = nil
         roamCyclesRemaining = 0
+        previousAPKey = nil
         previousAPName = nil
         previousSignal = nil
         previousSatisfaction = nil

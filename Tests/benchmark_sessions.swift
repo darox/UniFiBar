@@ -1,5 +1,5 @@
-// Compile with Models/*.swift and Utils/Formatters.swift using swiftc -O -swift-version 6.
-// Synthetic model microbenchmark only: no app launch, controller or native credentials.
+// Synthetic model microbenchmark. Build and run via Scripts/benchmark_sessions.sh.
+// No app launch, controller or native credentials.
 import Foundation
 
 @main
@@ -7,8 +7,7 @@ struct SessionBenchmark {
     @MainActor static func main() {
         let devices = (0..<500).map { index in
             DeviceDTO(id: "\(index)", macAddress: "AA:BB:\(index)", name: "AP \(index)",
-                      model: nil, state: "ONLINE", firmwareUpdatable: nil, features: nil,
-                      firmwareVersion: nil, ipAddress: nil)
+                      model: nil, state: "ONLINE", firmwareUpdatable: nil, features: nil)
         }
         let sessions = (0..<1000).map { index in
             SessionDTO(mac: "fixture", apMac: "aa:bb:\(index % 500)", duration: 60, assocTime: nil)

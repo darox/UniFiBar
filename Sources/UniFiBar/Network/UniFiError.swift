@@ -20,14 +20,14 @@ enum CertificateConnectionError: Error, Sendable, Equatable, LocalizedError {
     }
 }
 
-enum UniFiError: Error, Sendable, LocalizedError {
+enum UniFiError: Error, Sendable, Equatable, LocalizedError {
     case httpError(statusCode: Int)
     case noSitesFound
     case selfNotFound
     case invalidURL
-    case notConfigured
     case incompleteResponse
     case ambiguousSite
+    case throttled(retryInSeconds: Int)
 
     var errorDescription: String? {
         switch self {
@@ -35,9 +35,9 @@ enum UniFiError: Error, Sendable, LocalizedError {
         case .noSitesFound: "No sites found on this controller."
         case .selfNotFound: "This Mac was not found in the selected site's client list."
         case .invalidURL: "Invalid controller URL or site identifier."
-        case .notConfigured: "Not configured."
         case .incompleteResponse: "Controller returned an incomplete, inconsistent or over-limit collection."
         case .ambiguousSite: "Multiple sites found without a default. UniFiBar requires a default site or a single visible site."
+        case .throttled(let seconds): "Too many failed attempts. Wait \(seconds)s before retrying."
         }
     }
 }

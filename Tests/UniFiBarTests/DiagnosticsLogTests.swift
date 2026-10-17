@@ -36,7 +36,8 @@ struct DiagnosticsLogTests {
         for index in 0..<201 {
             log.record(.monitoring, level: .info, message: "private-event-\(index)")
         }
-        #expect(log.recentEvents.count == 200)
+        #expect(log.recentEvents(limit: 250).count == 200)
+        #expect(log.recentEvents(limit: DisplayLimits.rows).count == DisplayLimits.rows)
         let report = log.exportText(errorState: nil, consecutiveErrors: 0, pollInterval: 30,
             controllerHost: "private-controller.invalid", allowSelfSignedCerts: false,
             wifiStatus: status, includePrivateDetails: true)
@@ -47,7 +48,7 @@ struct DiagnosticsLogTests {
         #expect(events.first?.hasSuffix("private-event-200") == true)
         #expect(events.last?.hasSuffix("private-event-1") == true)
         log.clear()
-        #expect(log.recentEvents.isEmpty)
+        #expect(log.recentEvents(limit: DisplayLimits.rows).isEmpty)
     }
 
     @Test func typedStatusAndAvailabilitySurviveRedaction() {

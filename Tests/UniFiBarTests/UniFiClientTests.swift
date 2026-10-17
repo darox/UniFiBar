@@ -281,4 +281,21 @@ struct UniFiClientTests {
         await #expect(throws: CancellationError.self) { try await client.fetchSiteId() }
         #expect(await replay.remaining == 0)
     }
+
+    @Test func deviceStatsSnapshotDerivesBothProjectionsFromOneRequest() async throws {
+        let statsPath = "/proxy/network/integration/v1/sites/\(Self.siteID)/devices/synthetic-device/statistics/latest"
+        let stats = try json([
+            "uptimeSec": 3600,
+            "cpuUtilizationPct": 12.5,
+            "memoryUtilizationPct": 40.0
+        ])
+        let replay = Replay([.init(path: statsPath, data: stats)])
+        let client = UniFiClient(fixtureTransport: { try await replay.fetch($0) })
+        let snapshot = await client.fetchDeviceStats(deviceId: "synthetic-device", siteId: Self.siteID)
+        #expect(snapshot?.apStats.cpuUtilizationPct == 12.5)
+        #expect(snapshot?.apStats.memoryUtilizationPct == 40.0)
+        #expect(snapshot?.gatewayStats.uptimeSec == 3600)
+        #expect(await replay.remaining == 0)
+        await client.invalidate()
+    }
 }

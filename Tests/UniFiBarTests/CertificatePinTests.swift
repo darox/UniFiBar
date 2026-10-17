@@ -122,6 +122,42 @@ struct CertificatePinTests {
         }
     }
 
+    @Test func transientRejectionRecoversWhenStoredPinMatches() async throws {
+        let items = Items()
+        let delegate = PinnedCertDelegate(host: "fixture.invalid", pinStore: items.store)
+        #expect(try await decision(delegate) == .useCredential)
+        // A transient cause such as a wrong system clock rejects the session.
+        #expect(try await decision(delegate, certificate: "expired") == .cancelAuthenticationChallenge)
+        #expect(delegate.failure == .invalidCertificate)
+        // The stored pin proves this exact key was trusted; recovery is silent.
+        #expect(try await decision(delegate) == .useCredential)
+        #expect(delegate.failure == nil)
+    }
+
+    @Test func storageFailureAtInitRecoversOnlyAfterAPinExists() async throws {
+        let items = Items()
+        items.state.withLock { $0.readError = errSecInteractionNotAllowed }
+        let delegate = PinnedCertDelegate(host: "fixture.invalid", pinStore: items.store)
+        #expect(try await decision(delegate) == .cancelAuthenticationChallenge)
+        items.state.withLock { $0.readError = nil }
+        // Keychain healed but no pin exists: still no silent trust.
+        #expect(try await decision(delegate) == .cancelAuthenticationChallenge)
+        // Another delegate (or process) pins the controller; the wedged one recovers.
+        #expect(try await decision(PinnedCertDelegate(host: "fixture.invalid", pinStore: items.store)) == .useCredential)
+        #expect(try await decision(delegate) == .useCredential)
+    }
+
+    @Test func declinedFirstUseApprovalStaysDeclined() async throws {
+        let items = Items()
+        let delegate = PinnedCertDelegate(host: "192.0.2.1", pinStore: items.store, confirmCertificate: { _ in false })
+        #expect(try await decision(delegate, host: "192.0.2.1", viaTask: true) == .cancelAuthenticationChallenge)
+        #expect(await delegate.approvePendingCertificate() == false)
+        #expect(delegate.failure == .nameMismatch)
+        // Declining before any pin exists must not recover or re-prompt per poll.
+        #expect(try await decision(delegate, host: "192.0.2.1", viaTask: true) == .cancelAuthenticationChallenge)
+        #expect(items.state.withLock { $0.pin } == nil)
+    }
+
     @Test func unreadablePinMustNotBecomeFirstUse() async throws {
         let items = Items()
         items.state.withLock { $0.readError = errSecInteractionNotAllowed }
@@ -294,6 +330,6 @@ struct CertificatePinTests {
         "valid": "MIIByTCCAW+gAwIBAgIUZgBO03tJPTvyMjs4J2hy2+aovqAwCgYIKoZIzj0EAwIwGjEYMBYGA1UEAwwPZml4dHVyZS5pbnZhbGlkMB4XDTI2MDEwMTAwMDAwMFoXDTI3MDEwMTAwMDAwMFowGjEYMBYGA1UEAwwPZml4dHVyZS5pbnZhbGlkMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEBoz+usFG5kBjzVA32+ubLRetDNVPFFp3mlMCNgIzVt1oUtPp58vn1UIuAcI5tr+MWf2fZvkYQ3mqSWr7i2m9x6OBkjCBjzAdBgNVHQ4EFgQUFo8Xf6YP6DbcM5cUqGHs9W4/lB0wHwYDVR0jBBgwFoAUFo8Xf6YP6DbcM5cUqGHs9W4/lB0wGgYDVR0RBBMwEYIPZml4dHVyZS5pbnZhbGlkMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUFBwMBMAoGCCqGSM49BAMCA0gAMEUCIQCgi6X42Y3cfE7fqR0Mi7rdNMKjw1Lrm9iwvchabWCtegIgBLumjmy5aZ8QM6z96djlVsMoU9YFV1Ls74IJo3MzQlQ=",
         "replacement": "MIIByDCCAW+gAwIBAgIUPfAmsUD3VpHfeb40J/vSnxIeXfowCgYIKoZIzj0EAwIwGjEYMBYGA1UEAwwPZml4dHVyZS5pbnZhbGlkMB4XDTI2MDEwMTAwMDAwMFoXDTI3MDEwMTAwMDAwMFowGjEYMBYGA1UEAwwPZml4dHVyZS5pbnZhbGlkMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEc2rkclfScdExFRa6ZkZcI2IfT1DVAA4OiZJT8tYRESsb1xOUV4tqEbG85ak0YnCSjzuww1kWk6OK3Zy7QTjFa6OBkjCBjzAdBgNVHQ4EFgQUlWTHFK/QmBHrSuiZaseCGGlMcOQwHwYDVR0jBBgwFoAUlWTHFK/QmBHrSuiZaseCGGlMcOQwGgYDVR0RBBMwEYIPZml4dHVyZS5pbnZhbGlkMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUFBwMBMAoGCCqGSM49BAMCA0cAMEQCIH3vPMGne9Fb1k4N+6sSIA/uhzCJKKWwcnMaPzgiItsxAiADUsx+lr0luMHO571iX9PIIdnwP18TAA6ovbJyS4gOqQ==",
         "expired": "MIIByDCCAW+gAwIBAgIUR3T3Zb2tD7WxtDrgnTRvJDUiwYEwCgYIKoZIzj0EAwIwGjEYMBYGA1UEAwwPZml4dHVyZS5pbnZhbGlkMB4XDTAwMDEwMTAwMDAwMFoXDTAxMDEwMTAwMDAwMFowGjEYMBYGA1UEAwwPZml4dHVyZS5pbnZhbGlkMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEFYl42MmjcoNCHEs3zthDbaNyx3WaBW/y762QC6uuPs/K/lxlmpRNh5iTYB3JfjMYX+TAKFEx9f1wfjvf0ZP82qOBkjCBjzAdBgNVHQ4EFgQUvzedGD8CZdeSvFyw8+xMBXZb3WMwHwYDVR0jBBgwFoAUvzedGD8CZdeSvFyw8+xMBXZb3WMwGgYDVR0RBBMwEYIPZml4dHVyZS5pbnZhbGlkMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUFBwMBMAoGCCqGSM49BAMCA0cAMEQCIDQ7BrKebQUJDTk+PkFgB1gc4OXo6N2wojWFg6JuAlJ+AiA/0jKJLCjwvbICzUqpgTs9qOnf8k4k/G4KFCceS2YB1A==",
-        "future": "MIIBzTCCAXOgAwIBAgIUA9KWZGcY9w3LrJH+Otxvd0VfGBQwCgYIKoZIzj0EAwIwGjEYMBYGA1UEAwwPZml4dHVyZS5pbnZhbGlkMCIYDzIwOTAwMTAxMDAwMDAwWhgPMjA5OTAxMDEwMDAwMDBaMBoxGDAWBgNVBAMMD2ZpeHR1cmUuaW52YWxpZDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABBeNOHeYwis8Ik+NkjRGGI2TSpulI0D0hdyadJzxe4nCwwtlzwYvDLiQEMTnyur4PB8O5SyHoohvm06H0QFYcB2jgZIwgY8wHQYDVR0OBBYEFIWq+NBU0DaZ82IIKYLsFKcJzEDbMB8GA1UdIwQYMBaAFIWq+NBU0DaZ82IIKYLsFKcJzEDbMBoGA1UdEQQTMBGCD2ZpeHR1cmUuaW52YWxpZDAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDATAKBggqhkjOPQQDAgNIADBFAiEAs/YpBiID1RiNXdY415nqy7aalfWel9VTU7989/NSj/wCIFiJ1fOLjIAPg/emgoqOVsp/6QGaL805N94T/oR10tF3",
+        "future": "MIIBzTCCAXOgAwIBAgIUA9KWZGcY9w3LrJH+Otxvd0VfGBQwCgYIKoZIzj0EAwIwGjEYMBYGA1UEAwwPZml4dHVyZS5pbnZhbGlkMCIYDzIwOTAwMTAxMDAwMDAwWhgPMjA5OTAxMDEwMDAwMDBaMBoxGDAWBgNVBAMMD2ZpeHR1cmUuaW52YWxpZDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABBeNOHeYwis8Ik+NkjRGGI2TSpulI0D0hdyadJzxe4nCwwtlzwYvDLiQEMTnyur4PB8O5SyHoohvm06H0QFYcB2jgZIwgY8wHQYDVR0OBBYEFIWq+NBU0DaZ82IIKYLsFKcJzEDbMB8GA1UdIwQYMBaAFIWq+NBU0DaZ82IIKYLsFKcJzEDbMBoGA1UdEQQTMBGCD2ZpeHR1cmUuaW52YWxpZDAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDATAKBggqhkjOPQQDAgNIADBFAiEAs/YpBiID1RiNXdY415nqy7aalfWel9VTU7989/NSj/wCIFiJ1fOLjIAPg/emgoqOVsp/6QGaL805N94T/oR10tF3"
     ]
 }

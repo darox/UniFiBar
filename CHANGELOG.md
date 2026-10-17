@@ -3,12 +3,15 @@
 ## [Unreleased]
 
 ### Added
-- macOS 27 (Golden Gate) support: verified build, tests and release bundle on the macOS 27 SDK with Xcode 27. The deployment target stays macOS 26, so Tahoe users keep working.
+- macOS 27 (Golden Gate) support: verified build, tests, release bundle and app launch on macOS 27.2 with Xcode 27.1 and the macOS 27.0 SDK. The deployment target stays macOS 26, so Tahoe users keep working.
+
+### Fixed
+- The release bundle carries only entitlements that an ad-hoc signature can use. `keychain-access-groups` with `$(AppIdentifierPrefix)` cannot resolve without a provisioning profile; macOS rejects the entitlement and launchd refuses to start the bundle. `package_app.sh` now fails loudly if a placeholder reappears.
 
 ### Changed
 - Opening Setup/Preferences uses `NSApp.activate()`, the documented replacement for the soft-deprecated `activate(ignoringOtherApps:)`.
 - Menu footer buttons carry help tags, and Quit uses a power symbol instead of a close symbol. (macOS 27 hides menu item symbol images by default; UniFiBar presents a window-style menu bar extra, so it is unaffected.)
-- Requirements and checks now cover macOS 26 or 27 with Xcode 26 or 27.
+- Requirements and checks now cover macOS 26 or 27 with Xcode 26 or 27. CI tests the macOS 26 image and, as a non-blocking preview, the `xcode-27` image with the macOS 27 SDK.
 
 ## [1.0.0] — 2026-05-09
 

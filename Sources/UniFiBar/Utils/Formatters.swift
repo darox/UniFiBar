@@ -15,4 +15,19 @@ enum Formatters {
     static func relativeTime(from date: Date) -> String {
         relativeTime.localizedString(for: date, relativeTo: Date())
     }
+
+    /// Compact duration like "1d 4h", "2h 15m", or "30m". Negative input clamps to "0m".
+    nonisolated static func duration(seconds: Int) -> String {
+        let clamped = max(seconds, 0)
+        let days = clamped / 86400
+        let hours = (clamped % 86400) / 3600
+        let minutes = (clamped % 3600) / 60
+        if days > 0 {
+            return hours > 0 ? "\(days)d \(hours)h" : "\(days)d"
+        }
+        if hours > 0 {
+            return "\(hours)h \(minutes)m"
+        }
+        return "\(minutes)m"
+    }
 }

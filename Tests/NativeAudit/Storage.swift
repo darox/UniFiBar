@@ -108,18 +108,15 @@ func storageCheck(_ mode: String, id: UUID, argument: String?) async throws -> I
         let fault = KeychainHelper(operations: .init(read: scope.read, update: { q, _ in
             scope.scoped(q) == nil ? errSecParam : errSecInteractionNotAllowed
         }, add: scope.add, delete: scope.delete))
-        do { try await fault.save("synthetic-failed-update", for: .credentials); throw AuditFailure("hidden update error") }
-        catch KeychainError.saveFailed(let status) { try require(status == errSecInteractionNotAllowed, "injected status") }
+        do { try await fault.save("synthetic-failed-update", for: .credentials); throw AuditFailure("hidden update error") } catch KeychainError.saveFailed(let status) { try require(status == errSecInteractionNotAllowed, "injected status") }
         try require(try await helper.read(.credentials) == stored, "injected write fault preserves native record")
         try require(try pins.pinStore.load(host: "fixture.invalid") == Data(repeating: 1, count: 32), "pin across process restart")
-        do { try pins.pinStore.saveIfAbsent(Data(repeating: 2, count: 32), host: "fixture.invalid"); throw AuditFailure("conflicting pin accepted") }
-        catch CertificatePinStore.Failure.conflictingPin {}
+        do { try pins.pinStore.saveIfAbsent(Data(repeating: 2, count: 32), host: "fixture.invalid"); throw AuditFailure("conflicting pin accepted") } catch CertificatePinStore.Failure.conflictingPin {}
         try pins.pinStore.remove(host: "fixture.invalid")
         try require(try pins.pinStore.load(host: "sentinel.invalid") == Data(repeating: 3, count: 32), "per-account deletion scope")
     case "storage-pin-race":
         let candidate = UInt8(argument ?? "")!
-        do { try pins.pinStore.saveIfAbsent(Data(repeating: candidate, count: 32), host: "race.invalid"); print("WINNER=\(candidate)") }
-        catch CertificatePinStore.Failure.conflictingPin { print("CONFLICT=\(candidate)") }
+        do { try pins.pinStore.saveIfAbsent(Data(repeating: candidate, count: 32), host: "race.invalid"); print("WINNER=\(candidate)") } catch CertificatePinStore.Failure.conflictingPin { print("CONFLICT=\(candidate)") }
     case "storage-race-read":
         let pin = try pins.pinStore.load(host: "race.invalid")
         try require(pin == Data(repeating: 4, count: 32) || pin == Data(repeating: 5, count: 32), "one complete cross-process winner")
@@ -151,8 +148,7 @@ func storageCheck(_ mode: String, id: UUID, argument: String?) async throws -> I
         try require(try await helper.read(.credentials) != nil, "leftover synthetic record exists behind reset gate")
         try await prefs.save(controllerURL: url, apiKey: "synthetic-new", allowSelfSigned: false)
         try require(prefs.automaticConnectionAllowed, "explicit save clears intent")
-        do { try await prefs.resetAll().value }
-        catch let error as PreferencesManager.ResetError {
+        do { try await prefs.resetAll().value } catch let error as PreferencesManager.ResetError {
             try require(error.requiresEntitledBuild && error.components == ["credentials"], "only protected credentials unavailable")
             print("BLOCKED: protected reset cleanup -34018, source correctly reports incomplete")
         }

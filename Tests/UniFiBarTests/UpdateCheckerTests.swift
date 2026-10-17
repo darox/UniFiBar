@@ -25,6 +25,75 @@ struct UpdateCheckerTests {
         return (data, response)
     }
 
+    @Test(arguments: [404, 500])
+    func failedResponsesDoNotStampTheDailyCheck(status: Int) async throws {
+        await withDefaults { defaults in
+            let checker = UpdateChecker(defaults: defaults, fetch: { _ in
+                let url = try #require(URL(string: "https://api.github.com/repos/darox/UniFiBar/releases/latest"))
+                let response = try #require(HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil))
+                return (Data(), response)
+            })
+            await checker.checkNow()?.value
+            #expect(!checker.updateAvailable)
+            #expect(defaults.object(forKey: "com.unifbar.lastUpdateCheck") == nil)
+        }
+    }
+
+    @Test func malformedJSONIsNotACheck() async {
+        await withDefaults { defaults in
+            let checker = UpdateChecker(defaults: defaults, fetch: { _ in
+                let url = try #require(URL(string: "https://api.github.com/repos/darox/UniFiBar/releases/latest"))
+                let response = try #require(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil))
+                return (Data("definitely not json".utf8), response)
+            })
+            await checker.checkNow()?.value
+            #expect(!checker.updateAvailable)
+            #expect(checker.releaseURL == nil)
+            #expect(defaults.object(forKey: "com.unifbar.lastUpdateCheck") == nil)
+        }
+    }
+
+    @Test func equalVersionStampsTheCheckWithoutFlaggingAnUpdate() async throws {
+        await withDefaults { defaults in
+            let checker = UpdateChecker(defaults: defaults, fetch: { _ in
+                // v0.0.0 is the fallback current version of the unsigned test bundle.
+                let data = try JSONSerialization.data(withJSONObject: [
+                    "tag_name": "v0.0.0", "html_url": "https://github.com/darox/UniFiBar/releases/tag/v0.0.0"
+                ])
+                let url = try #require(URL(string: "https://api.github.com/repos/darox/UniFiBar/releases/latest"))
+                return (data, try #require(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)))
+            })
+            await checker.checkNow()?.value
+            #expect(!checker.updateAvailable)
+            #expect(checker.releaseURL == nil)
+            #expect(defaults.object(forKey: "com.unifbar.lastUpdateCheck") != nil)
+        }
+    }
+
+    @Test(arguments: ["https://github.com/darox/UniFiBar/releases",
+                      "https://github.com:443/darox/UniFiBar/releases/tag/v999.0.0",
+                      "https://github.com/darox/UniFiBar/releases/tag/v999.0.0"])
+    func trustedReleaseLinksArePublished(link: String) async {
+        await withDefaults { defaults in
+            let checker = UpdateChecker(defaults: defaults, fetch: { _ in try release(link) })
+            await checker.checkNow()?.value
+            #expect(checker.updateAvailable)
+            #expect(checker.releaseURL?.host == "github.com")
+            #expect(defaults.object(forKey: "com.unifbar.lastUpdateCheck") != nil)
+        }
+    }
+
+    @Test(arguments: ["https://github.com/darox\\UniFiBar/releases/tag/v2",
+                      "https://github.com/darox/UniFiBar/releases/tag/v2/.."])
+    func pathTricksAreNotPublished(link: String) async {
+        await withDefaults { defaults in
+            let checker = UpdateChecker(defaults: defaults, fetch: { _ in try release(link) })
+            await checker.checkNow()?.value
+            #expect(!checker.updateAvailable)
+            #expect(checker.releaseURL == nil)
+        }
+    }
+
     @Test func concurrentManualAndPeriodicChecksShareOneRequest() async {
         await withDefaults { defaults in
             var calls = 0

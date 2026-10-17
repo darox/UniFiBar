@@ -32,14 +32,14 @@ struct DecodeFlexibleArrayTests {
     // MARK: - Wrapped Array { "data": [...] }
 
     @Test func testWrappedArray() {
-        let json = """
+        let json = Data("""
         {
           "data": [
             {"id": "1", "name": "Alpha"},
             {"id": "2", "name": "Beta"}
           ]
         }
-        """.data(using: .utf8)!
+        """.utf8)
 
         let result = UniFiClient.decodeFlexibleArray(TestItem.self, from: json, endpoint: "test")
         #expect(result != nil)
@@ -50,12 +50,12 @@ struct DecodeFlexibleArrayTests {
     // MARK: - Bare Array [...]
 
     @Test func testBareArray() {
-        let json = """
+        let json = Data("""
         [
           {"id": "1", "name": "Alpha"},
           {"id": "2", "name": "Beta"}
         ]
-        """.data(using: .utf8)!
+        """.utf8)
 
         let result = UniFiClient.decodeFlexibleArray(TestItem.self, from: json, endpoint: "test")
         #expect(result != nil)
@@ -66,9 +66,9 @@ struct DecodeFlexibleArrayTests {
     // MARK: - Null Data { "data": null }
 
     @Test func testNullData() {
-        let json = """
+        let json = Data("""
         { "data": null }
-        """.data(using: .utf8)!
+        """.utf8)
 
         let result = UniFiClient.decodeFlexibleArray(TestItem.self, from: json, endpoint: "test")
         #expect(result != nil)
@@ -78,9 +78,9 @@ struct DecodeFlexibleArrayTests {
     // MARK: - Empty Data { "data": [] }
 
     @Test func testEmptyWrappedArray() {
-        let json = """
+        let json = Data("""
         { "data": [] }
-        """.data(using: .utf8)!
+        """.utf8)
 
         let result = UniFiClient.decodeFlexibleArray(TestItem.self, from: json, endpoint: "test")
         #expect(result != nil)
@@ -90,7 +90,7 @@ struct DecodeFlexibleArrayTests {
     // MARK: - Bare Empty Array []
 
     @Test func testBareEmptyArray() {
-        let json = "[]".data(using: .utf8)!
+        let json = Data("[]".utf8)
 
         let result = UniFiClient.decodeFlexibleArray(TestItem.self, from: json, endpoint: "test")
         #expect(result != nil)
@@ -100,7 +100,7 @@ struct DecodeFlexibleArrayTests {
     // MARK: - Invalid JSON
 
     @Test func testInvalidJSON() {
-        let json = "not json at all".data(using: .utf8)!
+        let json = Data("not json at all".utf8)
 
         let result = UniFiClient.decodeFlexibleArray(TestItem.self, from: json, endpoint: "test")
         #expect(result == nil)
@@ -118,9 +118,9 @@ struct DecodeFlexibleArrayTests {
     // MARK: - Non-array data value
 
     @Test func testNonArrayDataValue() {
-        let json = """
+        let json = Data("""
         { "data": "not_an_array" }
-        """.data(using: .utf8)!
+        """.utf8)
 
         let result = UniFiClient.decodeFlexibleArray(TestItem.self, from: json, endpoint: "test")
         // Should fail both wrapped and bare array decode, returning nil

@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  portable:
+    # macOS, not ubuntu: check.sh fails closed when a gate tool is missing, and
+    # SwiftLint has no supported Linux build.
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install gate tools
+        run: brew install swiftlint actionlint
+      - name: Portable checks
+        run: bash Scripts/check.sh --portable
+
+  test:
+    name: Test ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Baseline: proves the macOS 26 SDK still builds, so Tahoe users keep working.
+          - name: macOS 26 with Xcode 26
+            image: macos-26
+            preview: false
+          # GitHub marks this image as preview. Drop continue-on-error when it is stable.
+          - name: macOS 27 with Xcode 27 (preview)
+            image: xcode-27
+            preview: true
+    runs-on: ${{ matrix.image }}
+    continue-on-error: ${{ matrix.preview }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+      - name: Install SwiftLint
+        run: brew install swiftlint
+      - name: Lint
+        run: swiftlint lint --strict --no-cache
+      - name: Test
+        run: swift test

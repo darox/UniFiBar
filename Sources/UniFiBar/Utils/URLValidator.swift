@@ -7,6 +7,7 @@ enum URLValidator {
         case emptyHost
         case noQueryOrFragment
         case noUserinfo
+        case noPath
 
         var errorDescription: String? {
             switch self {
@@ -15,6 +16,7 @@ enum URLValidator {
             case .emptyHost: return "URL must include a hostname."
             case .noQueryOrFragment: return "URL must not contain query parameters or fragments."
             case .noUserinfo: return "URL must not contain user credentials (user:pass@)."
+            case .noPath: return "URL must not contain a path. Use the controller base address, for example https://192.168.1.1"
             }
         }
     }
@@ -42,8 +44,13 @@ enum URLValidator {
         guard url.query == nil, url.fragment == nil else {
             return .failure(.noQueryOrFragment)
         }
-        guard url.user == nil else {
+        guard url.user == nil, url.password == nil else {
             return .failure(.noUserinfo)
+        }
+        // Non-empty paths would break API path appending on the client side.
+        let path = url.path(percentEncoded: false)
+        guard path.isEmpty || path == "/" else {
+            return .failure(.noPath)
         }
         return .success(url)
     }

@@ -11,6 +11,7 @@ protocol UniFiClientProtocol: Sendable {
     func fetchWANHealth() async -> WANHealth?
     func fetchGatewayStats(deviceId: String, siteId: String) async -> GatewayStats?
     func fetchAPStats(deviceId: String, siteId: String) async -> APStats?
+    func fetchDeviceStats(deviceId: String, siteId: String) async -> DeviceStatsSnapshot?
     func fetchSessionHistory(mac: String) async -> [SessionDTO]?
     func fetchDDNSStatus() async -> (data: [DDNSStatusDTO]?, errorDetail: String?)
     func fetchPortForwards() async -> (data: [PortForwardDTO]?, errorDetail: String?)
@@ -21,7 +22,26 @@ protocol UniFiClientProtocol: Sendable {
     func invalidate() async
 }
 
+extension UniFiClientProtocol {
+    /// Default: fetch the two projections separately. `UniFiClient` overrides this with a
+    /// single request, since both projections decode from the same payload.
+    func fetchDeviceStats(deviceId: String, siteId: String) async -> DeviceStatsSnapshot? {
+        async let apStats = fetchAPStats(deviceId: deviceId, siteId: siteId)
+        async let gatewayStats = fetchGatewayStats(deviceId: deviceId, siteId: siteId)
+        let ap = await apStats
+        let gateway = await gatewayStats
+        guard ap != nil || gateway != nil else { return nil }
+        return DeviceStatsSnapshot(
+            apStats: ap ?? APStats(cpuUtilizationPct: nil, memoryUtilizationPct: nil),
+            gatewayStats: gateway ?? GatewayStats(uptimeSec: nil, cpuUtilizationPct: nil, memoryUtilizationPct: nil)
+        )
+    }
+}
+
 actor UniFiClient: UniFiClientProtocol {
+    /// Cap on nearby APs fetched by fetchRogueAPs; the menu title mirrors this value.
+    static let nearbyAPsLimit = 10
+
     private let baseURL: URL
     private let apiKey: String
     private let session: URLSession
@@ -32,6 +52,7 @@ actor UniFiClient: UniFiClientProtocol {
         let internalReference: String
     }
     private var site: Site?
+    private let decoder = JSONDecoder()
     private let fixtureTransport: (@Sendable (URLRequest) async throws -> Data)?
     private let localAddresses: @Sendable () -> [String]
     private var invalidated = false
@@ -44,10 +65,24 @@ actor UniFiClient: UniFiClientProtocol {
     private static let requestTimeout: TimeInterval = 15
     private static let logger = Logger(subsystem: "com.unifbar.app", category: "UniFiClient")
 
+    /// Ephemeral: the controller never needs cookies or credential persistence, and
+    /// the shared stores would outlive session invalidation and leak across reconfiguration.
+    private static func makeSessionConfiguration() -> URLSessionConfiguration {
+        let config = URLSessionConfiguration.ephemeral
+        config.httpShouldSetCookies = false
+        config.timeoutIntervalForRequest = requestTimeout
+        config.timeoutIntervalForResource = 30
+        return config
+    }
+
     init(baseURL: URL, apiKey: String, allowSelfSigned: Bool = false,
          confirmCertificate: (@Sendable (PinnedCertDelegate.CertificateDetails) async -> Bool)? = nil,
          pinStore: CertificatePinStore = .keychain) {
-        self.baseURL = baseURL
+        if case .success(let validated) = URLValidator.normalizeAndValidate(baseURL.absoluteString) {
+            self.baseURL = validated
+        } else {
+            self.baseURL = baseURL
+        }
         self.fixtureTransport = nil
         self.localAddresses = { DeviceDetector.activeIPv4Addresses() }
         // Strip control characters to prevent HTTP header injection
@@ -55,9 +90,7 @@ actor UniFiClient: UniFiClientProtocol {
             .map(String.init).joined()
 
         if allowSelfSigned {
-            let config = URLSessionConfiguration.default
-            config.timeoutIntervalForRequest = Self.requestTimeout
-            config.timeoutIntervalForResource = 30
+            let config = Self.makeSessionConfiguration()
             let delegate = PinnedCertDelegate(host: baseURL.host() ?? "", pinStore: pinStore, confirmCertificate: confirmCertificate)
             self.pinnedCertDelegate = delegate
             self.redirectDelegate = SameOriginRedirectDelegate(certificateDelegate: delegate)
@@ -67,9 +100,7 @@ actor UniFiClient: UniFiClientProtocol {
                 delegateQueue: nil
             )
         } else {
-            let config = URLSessionConfiguration.default
-            config.timeoutIntervalForRequest = Self.requestTimeout
-            config.timeoutIntervalForResource = 30
+            let config = Self.makeSessionConfiguration()
             self.pinnedCertDelegate = nil
             self.redirectDelegate = SameOriginRedirectDelegate()
             self.session = URLSession(configuration: config)
@@ -117,8 +148,10 @@ actor UniFiClient: UniFiClientProtocol {
     private func request(_ path: String, body: [String: Any]? = nil, query: [URLQueryItem] = []) async throws -> Data {
         guard !invalidated else { throw CancellationError() }
         try Task.checkCancellation()
-        let validatedURL = try URLValidator.normalizeAndValidate(baseURL.absoluteString).get()
-        let url = validatedURL.appending(path: path).appending(queryItems: query)
+        // The whole trust model assumes HTTPS. Never send the API key in cleartext,
+        // even if a future caller skips URLValidator.
+        guard baseURL.scheme?.lowercased() == "https" else { throw UniFiError.invalidURL }
+        let url = baseURL.appending(path: path).appending(queryItems: query)
         var req = URLRequest(url: url)
         req.setValue(apiKey, forHTTPHeaderField: "X-API-KEY")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -138,26 +171,42 @@ actor UniFiClient: UniFiClientProtocol {
                 throw pinnedCertDelegate?.failure ?? error
             }
             try Task.checkCancellation()
+            guard !invalidated else { throw CancellationError() }
             return try await responseData(for: req)
         }
     }
 
     private func responseData(for req: URLRequest) async throws -> Data {
-        let bytes: URLSession.AsyncBytes
-        let response: URLResponse
+        // Download to a temporary file: one suspension per chunk instead of one per
+        // byte, and the delegate enforces the size cap while the body streams in.
+        let delegate = CappedDownloadDelegate(limit: Self.responseBodyLimit, forwardingTo: redirectDelegate)
         do {
-            (bytes, response) = try await session.bytes(for: req, delegate: redirectDelegate)
+            let (fileURL, response) = try await session.download(for: req, delegate: delegate)
+            // The delegate moves the body out of the download temp file, which the system
+            // owns and may remove. Fall back to the returned URL when the move did not run.
+            let bodyURL = delegate.adoptedLocation ?? fileURL
+            defer { try? FileManager.default.removeItem(at: bodyURL) }
+            try Task.checkCancellation()
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw UniFiError.httpError(statusCode: -1)
+            }
+            guard httpResponse.statusCode == 200 else {
+                throw UniFiError.httpError(statusCode: httpResponse.statusCode)
+            }
+            return try Data(contentsOf: bodyURL)
         } catch {
             try Task.checkCancellation()
+            if delegate.exceededLimit { throw URLError(.dataLengthExceedsMaximum) }
             // URLSession reports a rejected trust challenge as an opaque cancellation (-999).
             if let failure = pinnedCertDelegate?.failure { throw failure }
             throw error
         }
-        defer { bytes.task.cancel() }
-        return try await Self.boundedResponseData(bytes, response: response)
     }
 
+    static let responseBodyLimit = 16 * 1_024 * 1_024
+
     /// ponytail: 16 MiB per controller response; large sites need bounded pagination, not a larger silent cap.
+    /// Used by UpdateChecker and tests; the production path caps via CappedDownloadDelegate.
     nonisolated static func boundedResponseData<Bytes: AsyncSequence>(
         _ bytes: Bytes, response: URLResponse, limit: Int = 16 * 1_024 * 1_024
     ) async throws -> Data where Bytes.Element == UInt8 {
@@ -231,7 +280,7 @@ actor UniFiClient: UniFiClientProtocol {
             try Task.checkCancellation()
             guard data.count <= bytesRemaining else { throw UniFiError.incompleteResponse }
             bytesRemaining -= data.count
-            let page = try JSONDecoder().decode(Page<T>.self, from: data)
+            let page = try decoder.decode(Page<T>.self, from: data)
             guard page.offset == result.count, page.count == page.data.count,
                   (0...200).contains(page.limit), page.count <= page.limit,
                   (0...5_000).contains(page.totalCount),
@@ -254,7 +303,7 @@ actor UniFiClient: UniFiClientProtocol {
     func fetchSelfV2() async throws -> SelfInfo {
         let reference = try await olderSiteReference()
         let data = try await request("/proxy/network/v2/api/site/\(reference)/clients/active")
-        let clients = try JSONDecoder().decode([V2ClientDTO].self, from: data)
+        let clients = try decoder.decode([V2ClientDTO].self, from: data)
         // ponytail: reject over 10,000 returned clients; never silently search a prefix.
         guard clients.count <= 10_000 else { throw UniFiError.incompleteResponse }
 
@@ -284,41 +333,34 @@ actor UniFiClient: UniFiClientProtocol {
 
     // MARK: - AP Statistics
 
-    func fetchAPStats(deviceId: String, siteId: String) async -> APStats? {
+    /// Latest device statistics. Both the AP and gateway projections decode from this one
+    /// payload, so a caller that knows the IDs match can derive both from a single request.
+    private func fetchDeviceStatsResponse(deviceId: String, siteId: String) async -> GatewayStatsResponse? {
         guard Self.isValidIdentifier(deviceId), Self.isValidIdentifier(siteId) else {
-            Self.logger.warning("Invalid identifier for AP stats request")
+            Self.logger.warning("Invalid identifier for device statistics request")
             return nil
         }
         do {
             let data = try await request(
                 "/proxy/network/integration/v1/sites/\(siteId)/devices/\(deviceId)/statistics/latest"
             )
-            let response = try JSONDecoder().decode(APStatsResponse.self, from: data)
-            return response.toAPStats
+            return try decoder.decode(GatewayStatsResponse.self, from: data)
         } catch {
-            Self.logger.error("Failed to fetch AP stats: \(Self.safeErrorDescription(error))")
+            Self.logger.error("Failed to fetch device statistics: \(Self.safeErrorDescription(error))")
             return nil
         }
     }
 
-    // MARK: - Session History (POST-based)
-
-    struct LegacyResponse<T: Decodable & Sendable>: Decodable, Sendable {
-        let data: [T]?
-
-        private enum CodingKeys: String, CodingKey { case data, meta }
-        private struct Metadata: Decodable { let rc: String }
-
-        init(from decoder: Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            if let meta = try container.decodeIfPresent(Metadata.self, forKey: .meta), meta.rc != "ok" {
-                throw DecodingError.dataCorruptedError(forKey: .meta, in: container,
-                    debugDescription: "Legacy response did not report success")
-            }
-            // An explicit null is empty; a missing data key is not a successful response.
-            data = try container.decode([T]?.self, forKey: .data)
-        }
+    func fetchAPStats(deviceId: String, siteId: String) async -> APStats? {
+        await fetchDeviceStatsResponse(deviceId: deviceId, siteId: siteId)?.toAPStats
     }
+
+    func fetchDeviceStats(deviceId: String, siteId: String) async -> DeviceStatsSnapshot? {
+        guard let response = await fetchDeviceStatsResponse(deviceId: deviceId, siteId: siteId) else { return nil }
+        return DeviceStatsSnapshot(apStats: response.toAPStats, gatewayStats: response.toGatewayStats)
+    }
+
+    // MARK: - Session History (POST-based)
 
     /// Decodes a UniFi API response that may be wrapped in `{ "data": [...] }`
     /// or `{ "data": null }`, or may be a bare array `[...]`.
@@ -383,7 +425,7 @@ actor UniFiClient: UniFiClientProtocol {
         do {
             let reference = try await olderSiteReference()
             let data = try await request("/proxy/network/api/s/\(reference)/stat/health")
-            let response = try JSONDecoder().decode(WANHealthResponse.self, from: data)
+            let response = try decoder.decode(WANHealthResponse.self, from: data)
             return response.toWANHealth()
         } catch {
             Self.logger.error("Failed to fetch WAN health: \(Self.safeErrorDescription(error))")
@@ -394,20 +436,7 @@ actor UniFiClient: UniFiClientProtocol {
     // MARK: - Gateway Statistics
 
     func fetchGatewayStats(deviceId: String, siteId: String) async -> GatewayStats? {
-        guard Self.isValidIdentifier(deviceId), Self.isValidIdentifier(siteId) else {
-            Self.logger.warning("Invalid identifier for gateway stats request")
-            return nil
-        }
-        do {
-            let data = try await request(
-                "/proxy/network/integration/v1/sites/\(siteId)/devices/\(deviceId)/statistics/latest"
-            )
-            let response = try JSONDecoder().decode(GatewayStatsResponse.self, from: data)
-            return response.toGatewayStats
-        } catch {
-            Self.logger.error("Failed to fetch gateway stats: \(Self.safeErrorDescription(error))")
-            return nil
-        }
+        await fetchDeviceStatsResponse(deviceId: deviceId, siteId: siteId)?.toGatewayStats
     }
 
     // MARK: - Dynamic DNS
@@ -451,11 +480,11 @@ actor UniFiClient: UniFiClientProtocol {
             guard let results = Self.decodeFlexibleArray(RogueAPDTO.self, from: data, endpoint: "rogueaps") else {
                 return (nil, "decode failed, \(data.count) bytes")
             }
-            // Return top 10 by signal strength (prefer dBm signal, fall back to rssi)
+            // Return the strongest APs (prefer dBm signal, fall back to rssi)
             let sorted = results.sorted {
                 ($0.signalDBm ?? -200) > ($1.signalDBm ?? -200)
             }
-            return (Array(sorted.prefix(10)), nil)
+            return (Array(sorted.prefix(Self.nearbyAPsLimit)), nil)
         } catch {
             return (nil, Self.safeErrorDescription(error))
         }
@@ -477,9 +506,9 @@ actor UniFiClient: UniFiClientProtocol {
             case .noSitesFound: return "no sites found"
             case .selfNotFound: return "self not found"
             case .invalidURL: return "invalid URL"
-            case .notConfigured: return "not configured"
             case .incompleteResponse: return "incomplete or inconsistent collection"
             case .ambiguousSite: return "multiple sites without a default"
+            case .throttled: return "connect attempts throttled"
             }
         }
         // For URLSession errors, only log the code/domain — not the full description which may contain URLs
@@ -490,7 +519,7 @@ actor UniFiClient: UniFiClientProtocol {
 }
 
 /// Custom API-key headers must never follow a redirect to another origin or HTTP.
-final class SameOriginRedirectDelegate: NSObject, URLSessionTaskDelegate {
+final class SameOriginRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendable {
     private let certificateDelegate: PinnedCertDelegate?
 
     init(certificateDelegate: PinnedCertDelegate? = nil) {
@@ -519,6 +548,66 @@ final class SameOriginRedirectDelegate: NSObject, URLSessionTaskDelegate {
               target.user == nil, target.password == nil
         else { return nil }
         return request
+    }
+}
+
+/// Enforces the response body cap while a download streams, and forwards the
+/// task-level trust and redirect decisions to the shared redirect delegate.
+final class CappedDownloadDelegate: NSObject, URLSessionDownloadDelegate, Sendable {
+    let limit: Int
+    private let redirectAndTrust: SameOriginRedirectDelegate
+    private let exceeded = OSAllocatedUnfairLock(initialState: false)
+    private let adopted = OSAllocatedUnfairLock<URL?>(initialState: nil)
+
+    init(limit: Int, forwardingTo redirectAndTrust: SameOriginRedirectDelegate) {
+        self.limit = limit
+        self.redirectAndTrust = redirectAndTrust
+    }
+
+    var exceededLimit: Bool { exceeded.withLock { $0 } }
+
+    /// Non-nil once the body has been moved out of the download temp file.
+    var adoptedLocation: URL? { adopted.withLock { $0 } }
+
+    /// The system removes the temp file when `didFinishDownloadingTo` returns, so the
+    /// delegate must move it somewhere it owns before reading.
+    static func adoptDownload(at location: URL) throws -> URL {
+        let owned = FileManager.default.temporaryDirectory
+            .appendingPathComponent("unifibar-response-\(UUID().uuidString)")
+        try FileManager.default.moveItem(at: location, to: owned)
+        return owned
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
+                    totalBytesExpectedToWrite: Int64) {
+        let capped = Int64(limit)
+        // totalBytesExpectedToWrite is NSURLResponseUnknownLength (-1) when unknown.
+        let advertised = totalBytesExpectedToWrite < 0 ? 0 : totalBytesExpectedToWrite
+        guard max(advertised, totalBytesWritten) <= capped else {
+            exceeded.withLock { $0 = true }
+            downloadTask.cancel()
+            return
+        }
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didFinishDownloadingTo location: URL) {
+        guard let owned = try? Self.adoptDownload(at: location) else { return }
+        adopted.withLock { $0 = owned }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    didReceive challenge: URLAuthenticationChallenge) async
+        -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+        await redirectAndTrust.urlSession(session, task: task, didReceive: challenge)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest) async -> URLRequest? {
+        await redirectAndTrust.urlSession(session, task: task,
+                                          willPerformHTTPRedirection: response, newRequest: request)
     }
 }
 
@@ -601,7 +690,7 @@ final class PinnedCertDelegate: NSObject, URLSessionDelegate, Sendable {
             return (.performDefaultHandling, nil)
         }
 
-        guard challenge.protectionSpace.host == expectedHost else {
+        guard challenge.protectionSpace.host.lowercased() == expectedHost.lowercased() else {
             return (.performDefaultHandling, nil)
         }
 
@@ -656,7 +745,17 @@ final class PinnedCertDelegate: NSObject, URLSessionDelegate, Sendable {
                     currentState = .storageFailed
                 }
                 return (.cancelAuthenticationChallenge, nil)
-            case .certChanged, .storageFailed, .awaitingApproval, .rejected, .invalidated:
+            case .rejected, .storageFailed:
+                // A stale failure can come from a transient cause: a wrong system clock
+                // or a locked Keychain at first use. Trust is regained only when the
+                // stored pin matches this exact key; a declined approval stays declined
+                // and .certChanged still requires an explicit reset.
+                if let stored = try? pinStore.load(host: expectedHost), stored == serverKeyHash {
+                    currentState = .pinned(stored)
+                    return (.useCredential, URLCredential(trust: serverTrust))
+                }
+                return (.cancelAuthenticationChallenge, nil)
+            case .certChanged, .awaitingApproval, .invalidated:
                 return (.cancelAuthenticationChallenge, nil)
             }
         }
@@ -705,12 +804,26 @@ final class PinnedCertDelegate: NSObject, URLSessionDelegate, Sendable {
         let date = verificationDate(for: SecTrustGetVerifyTime(trust))
         guard (notBefore as Date) <= date, date <= (notAfter as Date) else { return false }
 
-        // No system trust changes: anchors belong to this SecTrust object only.
-        guard SecTrustSetPolicies(trust, SecPolicyCreateSSL(true, host.map { $0 as CFString })) == errSecSuccess,
-              SecTrustSetAnchorCertificates(trust, [leaf] as CFArray) == errSecSuccess,
-              SecTrustSetAnchorCertificatesOnly(trust, true) == errSecSuccess
+        // Evaluate a fresh trust object: the challenge's trust belongs to Foundation,
+        // and mutating its policies or anchors would outlive this evaluation.
+        // Anchoring on the leaf alone means only self-signed certificates pass; that is
+        // the TOFU intent for LAN controllers.
+        let policy = SecPolicyCreateSSL(true, host.map { $0 as CFString })
+        var optionalTrust: SecTrust?
+        guard SecTrustCreateWithCertificates(leaf, policy, &optionalTrust) == errSecSuccess,
+              let freshTrust = optionalTrust,
+              SecTrustSetAnchorCertificates(freshTrust, [leaf] as CFArray) == errSecSuccess,
+              SecTrustSetAnchorCertificatesOnly(freshTrust, true) == errSecSuccess
         else { return false }
-        return SecTrustEvaluateWithError(trust, nil)
+        // Carry over an explicit verification time; zero means "now" and needs no copy.
+        let verifyTime = SecTrustGetVerifyTime(trust)
+        if verifyTime != 0 {
+            let verifyDate = Date(timeIntervalSinceReferenceDate: verifyTime) as CFDate
+            guard SecTrustSetVerifyDate(freshTrust, verifyDate) == errSecSuccess else { return false }
+        }
+        // Never let AIA or CRL lookups block the TLS challenge on network I/O.
+        SecTrustSetNetworkFetchAllowed(freshTrust, false)
+        return SecTrustEvaluateWithError(freshTrust, nil)
     }
 
     static func verificationDate(for time: CFAbsoluteTime) -> Date {

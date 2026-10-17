@@ -1,21 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-APP_NAME="UniFiBar"
-BUILD_DIR="$PROJECT_DIR/.build"
-APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
-
-# Source version info (with defaults)
-APP_VERSION="0.0.0"
-BUILD_NUMBER="0"
-if [ -f "$PROJECT_DIR/version.env" ]; then
-    source "$PROJECT_DIR/version.env"
-fi
-
-# Source shared bundle assembly
-source "$SCRIPT_DIR/build_common.sh"
+# Shared paths, version info and bundle assembly
+source "$(dirname "$0")/build_common.sh"
+init_build_env debug
 
 echo "==> Killing existing $APP_NAME..."
 pkill -x "$APP_NAME" 2>/dev/null || true

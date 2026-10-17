@@ -8,8 +8,6 @@ struct DeviceDTO: Decodable, Sendable {
     let state: String?
     let firmwareUpdatable: Bool?
     let features: [String]?
-    let firmwareVersion: String?
-    let ipAddress: String?
 
     /// Convenience alias
     var mac: String? { macAddress }
@@ -45,7 +43,7 @@ struct WANHealthResponse: Decodable, Sendable {
     let data: [HealthEntry]
 
     init(from decoder: Decoder) throws {
-        data = try UniFiClient.LegacyResponse<HealthEntry>(from: decoder).data ?? []
+        data = try LegacyResponse<HealthEntry>(from: decoder).data ?? []
     }
 
     struct HealthEntry: Decodable, Sendable {
@@ -179,28 +177,26 @@ struct GatewayStats: Sendable {
     let uptimeSec: Int?
     let cpuUtilizationPct: Double?
     let memoryUtilizationPct: Double?
-    let uplinkTxRateBps: Double?
-    let uplinkRxRateBps: Double?
 }
 
 struct GatewayStatsResponse: Decodable, Sendable {
     let uptimeSec: Int?
     let cpuUtilizationPct: Double?
     let memoryUtilizationPct: Double?
-    let uplink: GatewayUplink?
-
-    struct GatewayUplink: Decodable, Sendable {
-        let txRateBps: Double?
-        let rxRateBps: Double?
-    }
 
     var toGatewayStats: GatewayStats {
         GatewayStats(
             uptimeSec: uptimeSec,
             cpuUtilizationPct: cpuUtilizationPct,
-            memoryUtilizationPct: memoryUtilizationPct,
-            uplinkTxRateBps: uplink?.txRateBps,
-            uplinkRxRateBps: uplink?.rxRateBps
+            memoryUtilizationPct: memoryUtilizationPct
+        )
+    }
+
+    /// The AP projection reads a subset of the same payload.
+    var toAPStats: APStats {
+        APStats(
+            cpuUtilizationPct: cpuUtilizationPct,
+            memoryUtilizationPct: memoryUtilizationPct
         )
     }
 }
@@ -208,23 +204,15 @@ struct GatewayStatsResponse: Decodable, Sendable {
 // MARK: - AP Statistics
 
 struct APStats: Sendable {
-    let uptimeSec: Int?
     let cpuUtilizationPct: Double?
     let memoryUtilizationPct: Double?
 }
 
-struct APStatsResponse: Decodable, Sendable {
-    let uptimeSec: Int?
-    let cpuUtilizationPct: Double?
-    let memoryUtilizationPct: Double?
-
-    var toAPStats: APStats {
-        APStats(
-            uptimeSec: uptimeSec,
-            cpuUtilizationPct: cpuUtilizationPct,
-            memoryUtilizationPct: memoryUtilizationPct
-        )
-    }
+/// Both statistics projections decode from one device payload. Fetching once and
+/// deriving both avoids a duplicate request when the AP and gateway share a device.
+struct DeviceStatsSnapshot: Sendable {
+    let apStats: APStats
+    let gatewayStats: GatewayStats
 }
 
 // MARK: - Self Info (v2 client + network context)

@@ -46,6 +46,9 @@ Tested with **Ubiquiti UniFi** network equipment:
 - Xcode 26 or 27 command line tools (Swift 6.2+)
 - A UniFi API key (Settings → Integrations → Generate API Key)
 
+Last verified on macOS 26 with Xcode 26 and on macOS 27.2 with Xcode 27.1.
+CI builds and tests both the macOS 26 and the Xcode 27 preview images.
+
 ## Build & Install
 
 ```bash
@@ -79,7 +82,7 @@ For test commands, worktree setup, and macOS QA, read
 
 ## How It Works
 
-UniFiBar connects to your UniFi controller's API and identifies your Mac by matching its local IP address against active clients. It polls every 30 seconds for updated metrics and reacts instantly to network changes and wake-from-sleep events.
+UniFiBar connects to your UniFi controller's API and identifies your Mac by matching its local IP address against active clients. It polls every 30 seconds by default. The interval is configurable from 10 to 300 seconds, and failed polls back off up to 300 seconds. The app also reacts instantly to network changes and wake-from-sleep events.
 
 **Data sources:**
 - Official UniFi Integration API — devices, sites, statistics, VPN tunnels
@@ -113,6 +116,11 @@ required; see [development checks](docs/development.md).
 - **SwiftUI** with Liquid Glass materials (macOS 26 and 27)
 - **SwiftPM** — no Xcode project required
 - **async/await** with actor isolation for thread safety
+
+## Security
+
+Read the [security policy](SECURITY.md) for reporting instructions
+and supported versions.
 
 ## License
 

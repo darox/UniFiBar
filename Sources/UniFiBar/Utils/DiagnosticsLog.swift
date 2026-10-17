@@ -49,8 +49,10 @@ final class DiagnosticsLog {
         return f
     }()
 
-    var recentEvents: [Event] {
-        events.reversed()
+    /// Newest first, capped at the caller's row budget so a large log never allocates a full copy.
+    func recentEvents(limit: Int) -> [Event] {
+        guard limit > 0 else { return [] }
+        return Array(events.suffix(limit).reversed())
     }
 
     func record(_ category: Category, level: Level, message: String, detail: String? = nil) {

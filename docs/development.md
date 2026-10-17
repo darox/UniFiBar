@@ -97,9 +97,8 @@ remains disabled because it unregisters the real login item. The other reset tes
 inject both `removePins` and `unregisterLoginItem`; never omit those dependencies
 when testing reset. `KeychainHelperTests` replaces every Security operation with
 an in-memory fixture. Native reset and certificate-pin cleanup remain lab QA.
-Ordinary credential tests must never access the real Keychain. The explicit native
-fixture command below is the only direct-host exception: exact synthetic namespaces,
-not application records.
+Ordinary credential tests must never access the real Keychain or the real login
+item.
 
 ### Restricted sandboxes
 
@@ -117,9 +116,6 @@ certificate failure in a sandbox as environmental until an unsandboxed run
 proves otherwise. The full suite also touches `NSUserDefaults` suites and can
 stall on host-only paths under a sandbox; run `bash Scripts/check.sh` once on
 the host before you trust sandbox results.
-
-`Scripts/benchmark_sessions.sh` builds and runs the synthetic session
-benchmark. It is a manual tool, not part of `check.sh`.
 
 ### Credential format and reset lifecycle
 
@@ -238,9 +234,8 @@ signing, controller latency, or app runtime.
 
 ## Debug and end-to-end QA
 
-Use the Swift extension with `.vscode/launch.json` for code debugging. Its
-working directory now works with any checkout name. A bare SwiftPM executable
-does not have the packaged app's metadata and icons. Use the bundle for UI QA.
+A bare SwiftPM executable does not have the packaged app's metadata and icons.
+Use the bundle for UI QA.
 
 On a separate macOS test account, after the full command passes:
 
@@ -264,53 +259,9 @@ log stream --style compact --predicate 'subsystem == "com.unifbar.app"'
 Record the commit, macOS/Xcode versions, commands, exit codes, and screenshots.
 Mark end-to-end QA complete only when these checks pass. `MenuLayoutTests` measures
 offscreen setup/error and connected full/compact layouts at synthetic 360/600/1000
-point height budgets. Native fixtures below add real TLS and view/action checks,
-but do not launch the product's MenuBarExtra or establish live controller, physical
-display, keyboard/VoiceOver or sleep/wake compatibility. A missing test controller
-is a blocker, not a passed test.
-
-### Opt-in direct-host native fixtures
-
-```bash
-python3 Tests/NativeAudit/run.py --run-synthetic-native-checks
-# Or select one group: --only storage | --only transport | --only ui
-```
-
-Requires macOS, the selected Swift/Xcode tools, Python 3 and an existing OpenSSL.
-Not invoked by `check.sh`. No VM, separate account, system trust changes,
-dependencies, installed-app launch or login-item actions. This is namespace
-separation, **not execution isolation**. Current Codex-local Mantis policy permits
-safe local checks, but a fixture pass alone does not establish formal reproduction
-or independent re-attack; apply the installed policy's evidence gates.
-
-The runner compiles current production sources excluding the real app entry points.
-Each run records source hashes, commands, PIDs, statuses and fixture-only images in
-private `.build/remaining-native-<UUID>/`. Native credential and pin operations
-preserve backend attributes while enforcing exact synthetic service/account scopes,
-including cleanup. Process-local Keychain interaction is disabled and restored.
-Restart and interrupted-reset fixtures exit only their own processes; these are
-not power-loss tests. Competing writes may report native duplicate/readback failures;
-the assertion is a coherent committed record, not cross-process serialization.
-Protected deletion returning `-34018` remains visible as **exit 2**, even when
-accessible records are removed. Packaging remains ad-hoc, not an entitled identity.
-UI defaults cleanup also runs in a separate owned command after the UI process
-exits or times out; cleanup failure remains a runner failure.
-
-Loopback TLS uses synthetic certificates, production trust/redirect/stream policies,
-an in-memory pin store, 1 KiB boundary fixtures and shortened 2/4-second timeouts.
-Native persistence is checked separately. It never contacts a controller. The UI
-harness hosts real menu, diagnostics, Setup and Preferences views in owned AppKit
-windows without activating them. It uses fake storage, an offline rejecting client,
-fake login-item operations and clipboard sinks, and captures only those views.
-It enables accessibility traversal only inside its own fixture process; no permission
-or system VoiceOver setting changes. Form actions cover empty submission, URL
-validation before client creation, normalized inputs, authentication errors, compact
-preference persistence and login-toggle load/failure rollback. Programmatic actions
-are not keyboard/VoiceOver or real login-item validation. Successful credential
-connection and physical lifecycle checks still need an authorized QA environment.
-
-A beta-host fixture pass is not stable macOS 26 or 27 verification. The open
-release gates live in the issue tracker.
+point height budgets. They do not launch the product's MenuBarExtra and they do not
+establish live controller, physical display, keyboard, VoiceOver or sleep/wake
+compatibility. A missing test controller is a blocker, not a passed test.
 
 Preferences contains an event log and a report export. Both copy actions redact
 identifiers and arbitrary text by default, retaining typed metrics, error titles,

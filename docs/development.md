@@ -47,9 +47,9 @@ bash Scripts/check.sh
 token shapes, private-key headers and secret-bearing file types. It is a tripwire,
 not proof. Add a pattern when a new credential shape appears.
 
-The history scan exists because an ignored file is not a safe file. Agent tooling
-(the T3 Code checkpoints under `refs/t3`) commits the whole working tree, ignored
-files included. If the scan reports a file, rotate the credential first, then
+The history scan exists because an ignored file is not a safe file. Tooling
+checkpoint refs under `refs/t3` commit the whole working tree, ignored files
+included. If the scan reports a file, rotate the credential first, then
 delete the refs that hold it:
 
 ```bash
@@ -101,7 +101,7 @@ Ordinary credential tests must never access the real Keychain. The explicit nati
 fixture command below is the only direct-host exception: exact synthetic namespaces,
 not application records.
 
-### Sandboxed agent runs
+### Restricted sandboxes
 
 Restricted sandboxes (for example AI agent shells) block parts of the build.
 Run tests there with explicit cache paths:
@@ -309,8 +309,8 @@ preference persistence and login-toggle load/failure rollback. Programmatic acti
 are not keyboard/VoiceOver or real login-item validation. Successful credential
 connection and physical lifecycle checks still need an authorized QA environment.
 
-See [the finish-audit report](archive/audit-finish-2026-09-08.md) for actual results
-and release gates. A beta-host fixture pass is not stable macOS 26 or 27 verification.
+A beta-host fixture pass is not stable macOS 26 or 27 verification. The open
+release gates live in the issue tracker.
 
 Preferences contains an event log and a report export. Both copy actions redact
 identifiers and arbitrary text by default, retaining typed metrics, error titles,

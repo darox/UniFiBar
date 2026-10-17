@@ -63,9 +63,9 @@ fi
 if [ "$fail" -ne 0 ]; then
     cat >&2 <<'REMEDY'
 REMEDY: rotate the exposed credential, then remove it from the object database:
-  git for-each-ref --format='%(refname)' refs/t3 | xargs -r -n1 git update-ref -d
-  git reflog expire --expire=now --all && git gc --prune=now --aggressive
+  Scripts/prune_checkpoints.sh
 Ignored files are not safe. Tooling checkpoints commit the whole working tree.
+Push explicit branches and tags only. Scripts/hooks/pre-push refuses refs/t3.
 REMEDY
     exit 1
 fi

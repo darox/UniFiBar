@@ -38,7 +38,9 @@ Tested with **Ubiquiti UniFi** network equipment:
 
 - **Gateways**: Cloud Gateway Fiber (UCG Fiber), UniFi Dream Machine (UDM), UDM Pro, UDR, UXG
 - **Access Points**: U7 Pro, U7 In-Wall, U6, AC Mesh, and all UniFi APs
-- **Requires**: UniFi Network Application 10.1.85+ with API key support
+- **Requires**: a UniFi Network Application release that exposes the official
+  Network Integration API and API keys (verified against 10.4.57, see
+  [the API contract notes](docs/unifi-api-contracts-2026-09-08.md))
 
 ## Requirements
 

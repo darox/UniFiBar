@@ -44,6 +44,28 @@ final class TrustPromptGate: Sendable {
     }
 }
 
+/// Caps system-event refreshes. A wake or a path change is a deliberate recovery trigger, but a
+/// flapping network must not refresh faster than the poll backoff allows.
+@MainActor
+final class RecoveryThrottle {
+    private let interval: TimeInterval
+    private var lastAttempt: Date?
+
+    init(interval: TimeInterval = 60) {
+        self.interval = interval
+    }
+
+    func allow(at now: Date) -> Bool {
+        if let lastAttempt, now.timeIntervalSince(lastAttempt) < interval { return false }
+        lastAttempt = now
+        return true
+    }
+
+    func reset() {
+        lastAttempt = nil
+    }
+}
+
 @MainActor
 @Observable
 final class StatusBarController {
@@ -110,12 +132,15 @@ final class StatusBarController {
     private var consecutiveErrors = 0
     private var failedConnectAttempts = 0
     private var connectRetryAvailableAt: Date?
+    private let recoveryThrottle = RecoveryThrottle()
     private var hasTornDown = false
     private var authFailed = false
     private var lastManualRefresh: Date = .distantPast
     private var successCount = 0
     private var isRefreshing = false
-    private var refreshGeneration = 0
+    /// Bumped by teardown and reconfigure. The wake and path handlers capture it and
+    /// recheck it, so a stale event never writes state. Read-only outside the controller.
+    private(set) var refreshGeneration = 0
     private var connectionGeneration = 0
     private var validationClients: [Int: UniFiClientProtocol] = [:]
 
@@ -177,6 +202,7 @@ final class StatusBarController {
         // Invalidate old URLSession to release delegate and cancel in-flight requests
         let oldClient = client
         client = nil
+        recoveryThrottle.reset()
         await oldClient?.invalidate()
         guard gen == refreshGeneration else { return }
         let loadedClient = await loadClient()
@@ -339,6 +365,7 @@ final class StatusBarController {
         successCount = 0
         failedConnectAttempts = 0
         connectRetryAvailableAt = nil
+        recoveryThrottle.reset()
         isRefreshing = false
         refreshGeneration += 1
         hasStarted = false
@@ -388,9 +415,30 @@ final class StatusBarController {
         startPolling()
     }
 
+    /// Shared recovery path for the wake and network-path handlers. The throttle keeps a
+    /// flapping network from refreshing faster than the poll backoff allows. Returns false
+    /// when the event was dropped, so the callers stay one line each.
+    @discardableResult
+    func handleRecoveryEvent(generation: Int, sleepBefore: Duration? = nil) async -> Bool {
+        if let sleepBefore { try? await sleep(sleepBefore) }
+        guard generation == refreshGeneration,
+              !hasTornDown,
+              client != nil,
+              recoveryThrottle.allow(at: now()) else { return false }
+        // Backoff resets on successful refresh only. Clearing it here would let a
+        // flapping network poll an unreachable controller at full cadence.
+        await refresh(generation: generation)
+        guard generation == refreshGeneration else { return false }
+        // If polling had stopped (auth failure), don't restart
+        if !authFailed && pollTask == nil {
+            startPolling()
+        }
+        return true
+    }
+
     private func observeSystemEvents() {
         guard preferences.automaticConnectionAllowed, observesSystemEvents, !hasSystemObservers else { return }
-        // Wake from sleep — wait for network, then refresh with reset backoff
+        // Wake from sleep. The 8 s wait lets Wi-Fi reassociate before the refresh.
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil,
@@ -398,18 +446,7 @@ final class StatusBarController {
         ) { [weak self] _ in
             guard let self else { return }
             Task { @MainActor in
-                let gen = self.refreshGeneration
-                // Backoff resets on successful refresh only; clearing it here would
-                // let a flapping network poll an unreachable controller at full cadence.
-                // The 8 s wait lets Wi-Fi reassociate after wake before refreshing.
-                try? await self.sleep(.seconds(8))
-                guard gen == self.refreshGeneration, !self.hasTornDown, self.client != nil else { return }
-                await self.refresh(generation: gen)
-                guard gen == self.refreshGeneration else { return }
-                // If still failing, restart normal polling
-                if !self.authFailed && self.pollTask == nil {
-                    self.startPolling()
-                }
+                await self.handleRecoveryEvent(generation: self.refreshGeneration, sleepBefore: .seconds(8))
             }
         }
 
@@ -420,14 +457,7 @@ final class StatusBarController {
             guard skipFirst.check() else { return }
             guard let self, path.status == .satisfied else { return }
             Task { @MainActor in
-                let gen = self.refreshGeneration
-                guard !self.hasTornDown, self.client != nil else { return }
-                await self.refresh(generation: gen)
-                guard gen == self.refreshGeneration else { return }
-                // If polling had stopped (auth failure), don't restart
-                if !self.authFailed && self.pollTask == nil {
-                    self.startPolling()
-                }
+                await self.handleRecoveryEvent(generation: self.refreshGeneration)
             }
         }
         monitor.start(queue: DispatchQueue(label: "com.unifbar.pathmonitor"))

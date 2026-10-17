@@ -12,6 +12,7 @@ struct UniFiBarApp: App {
         MenuBarExtra {
             MenuContentView(controller: controller)
                 .frame(width: 320)
+                .fixedSize(horizontal: false, vertical: true)
         } label: {
             StatusBarLabel(controller: controller)
         }

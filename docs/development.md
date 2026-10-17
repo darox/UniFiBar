@@ -32,6 +32,9 @@ use `package_app.sh` if the running app must stay open.
 ## Checks
 
 ```bash
+# Once per clone: refuse to publish the refs/t3 checkpoints.
+Scripts/install_hooks.sh
+
 # Linux or macOS: shell syntax, ShellCheck, bundle staging, diff whitespace.
 bash Scripts/check.sh --portable
 
@@ -50,12 +53,13 @@ files included. If the scan reports a file, rotate the credential first, then
 delete the refs that hold it:
 
 ```bash
-git for-each-ref --format='%(refname)' refs/t3 | xargs -r -n1 git update-ref -d
-git reflog expire --expire=now --all && git gc --prune=now
+Scripts/prune_checkpoints.sh
 ```
 
 Push explicit branches and tags only. Never `git push --all` or `git push --mirror`,
-which would publish those refs.
+which would publish those refs. Run `Scripts/install_hooks.sh` once per clone to
+point Git at `Scripts/hooks`. The pre-push hook then refuses to publish any
+`refs/t3/*` ref, including a `--mirror` push.
 
 The full command verifies the release bundle's plist and code signature.
 It does not launch the app or test the display. It returns status 2 on Linux. A portable pass is not a full pass.

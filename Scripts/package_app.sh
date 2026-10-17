@@ -9,6 +9,10 @@ echo "==> Building $APP_NAME (release)..."
 cd "$PROJECT_DIR"
 swift build -c release 2>&1
 
+# .build/release is a symlink on this toolchain, and launchd refuses a bundle launched
+# through it. Resolve the real directory before assembling or signing.
+APP_BUNDLE="$(cd "$(dirname "$APP_BUNDLE")" && pwd -P)/$(basename "$APP_BUNDLE")"
+
 BINARY="$BUILD_DIR/release/$APP_NAME"
 if [ ! -f "$BINARY" ]; then
     echo "ERROR: Binary not found at $BINARY"

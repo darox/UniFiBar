@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-18
+
 ### Added
 - macOS 27 (Golden Gate) support: verified build, tests, release bundle and app launch on macOS 27.2 with Xcode 27.1 and the macOS 27.0 SDK. The deployment target stays macOS 26, so Tahoe users keep working.
 

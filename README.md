@@ -49,7 +49,12 @@ Tested with **Ubiquiti UniFi** network equipment:
 Last verified on macOS 26 with Xcode 26 and on macOS 27.2 with Xcode 27.1.
 CI builds and tests both the macOS 26 and the Xcode 27 preview images.
 
-## Build & Install
+## Install
+
+Download the [latest release](https://github.com/darox/UniFiBar/releases/latest), unzip it, and move `UniFiBar.app` to Applications.
+The build carries a Developer ID signature and an Apple notarization ticket.
+
+To build from source:
 
 ```bash
 git clone https://github.com/darox/UniFiBar.git

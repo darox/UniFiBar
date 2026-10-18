@@ -19,7 +19,7 @@ NOTARY_PROFILE="${NOTARY_PROFILE:-unifibar-notary}"
 IDENTITY="${DEVELOPER_ID:-}"
 if [ -z "$IDENTITY" ]; then
     IDENTITY="$(security find-identity -v -p codesigning \
-        | sed -n 's/.*"\(Developer ID Application [^"]*\)".*/\1/p' | head -1)"
+        | sed -n 's/.*"\(Developer ID Application[^"]*\)".*/\1/p' | head -1)"
 fi
 if [ -z "$IDENTITY" ]; then
     echo "ERROR: no Developer ID Application identity found." >&2

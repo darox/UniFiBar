@@ -19,3 +19,6 @@ tasks/
 BRIEF.md
 CLAUDE.md
 SKILLS_SETUP.md
+
+# Release artifacts
+dist/

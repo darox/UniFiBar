@@ -232,6 +232,26 @@ This measures shell staging only: seven rounds of twenty bundles after two
 warm-up bundles. It does not measure Swift compilation, icon conversion,
 signing, controller latency, or app runtime.
 
+## Release signing
+
+`package_app.sh` makes an ad-hoc signed bundle for local use. macOS blocks an
+ad-hoc signed app that arrives with the quarantine attribute, so a published
+download needs a Developer ID signature and a notarization ticket.
+
+One-time setup:
+
+1. Create a **Developer ID Application** certificate in Xcode > Settings >
+   Accounts > Manage Certificates.
+2. Store the notary credentials:
+   `xcrun notarytool store-credentials unifibar-notary --team-id TEAMID --apple-id EMAIL`
+
+Then run `Scripts/release_app.sh`. It signs with the hardened runtime, notarizes,
+staples the ticket, and writes `dist/UniFiBar-<version>.zip`. Upload the zip with
+`gh release upload v<version> dist/UniFiBar-<version>.zip`.
+
+A Developer ID build has a different code identity from the ad-hoc build, so macOS
+may ask for Keychain access after the first launch.
+
 ## Debug and end-to-end QA
 
 A bare SwiftPM executable does not have the packaged app's metadata and icons.

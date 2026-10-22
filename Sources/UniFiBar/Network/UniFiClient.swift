@@ -179,28 +179,33 @@ actor UniFiClient: UniFiClientProtocol {
     private func responseData(for req: URLRequest) async throws -> Data {
         // Download to a temporary file: one suspension per chunk instead of one per
         // byte, and the delegate enforces the size cap while the body streams in.
-        let delegate = CappedDownloadDelegate(limit: Self.responseBodyLimit, forwardingTo: redirectDelegate)
         do {
-            let (fileURL, response) = try await session.download(for: req, delegate: delegate)
-            // The delegate moves the body out of the download temp file, which the system
-            // owns and may remove. Fall back to the returned URL when the move did not run.
-            let bodyURL = delegate.adoptedLocation ?? fileURL
-            defer { try? FileManager.default.removeItem(at: bodyURL) }
-            try Task.checkCancellation()
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw UniFiError.httpError(statusCode: -1)
-            }
-            guard httpResponse.statusCode == 200 else {
-                throw UniFiError.httpError(statusCode: httpResponse.statusCode)
-            }
-            return try Data(contentsOf: bodyURL)
+            return try await Self.boundedResponse(
+                for: req, using: session, delegate: redirectDelegate
+            )
         } catch {
             try Task.checkCancellation()
-            if delegate.exceededLimit { throw URLError(.dataLengthExceedsMaximum) }
             // URLSession reports a rejected trust challenge as an opaque cancellation (-999).
             if let failure = pinnedCertDelegate?.failure { throw failure }
             throw error
         }
+    }
+
+    nonisolated static func boundedResponse(
+        for request: URLRequest, using session: URLSession,
+        delegate: URLSessionTaskDelegate, limit: Int = responseBodyLimit
+    ) async throws -> Data {
+        guard limit >= 0 else { throw URLError(.dataLengthExceedsMaximum) }
+        let (fileURL, response) = try await session.download(for: request, delegate: delegate)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        try Task.checkCancellation()
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw UniFiError.httpError(statusCode: -1)
+        }
+        guard httpResponse.statusCode == 200 else {
+            throw UniFiError.httpError(statusCode: httpResponse.statusCode)
+        }
+        return try Data(contentsOf: fileURL)
     }
 
     static let responseBodyLimit = 16 * 1_024 * 1_024

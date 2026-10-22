@@ -14,8 +14,8 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def assemble(script, project, build):
-    subprocess.run(
+def assemble_result(script, project, build):
+    return subprocess.run(
         [
             "bash", "-euc",
             '''
@@ -26,9 +26,15 @@ assemble_app_bundle "$3/UniFiBar.app" "$3/UniFiBar" "$2" "$3"
             "bundle-test", str(script), str(project), str(build),
         ],
         env={**os.environ, "APP_NAME": "UniFiBar", "APP_VERSION": "1.2.3", "BUILD_NUMBER": "4"},
-        check=True,
-        stdout=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
     )
+
+
+def assemble(script, project, build):
+    result = assemble_result(script, project, build)
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
 
 
 def check_bundle(project, build):
@@ -51,6 +57,48 @@ def check_bundle(project, build):
         assert (build / "AppIcon.iconset" / icon.name).read_bytes() == icon.read_bytes()
     for icon in (assets / "StatusBarIcon.imageset").glob("*.png"):
         assert (bundle / "Resources" / icon.name).read_bytes() == icon.read_bytes()
+
+
+def make_project_fixture(root, name):
+    project = root / name
+    shutil.copytree(ROOT / "Resources", project / "Resources")
+    shutil.copy(ROOT / "UniFiBar.entitlements", project)
+    build = project / ".build"
+    build.mkdir()
+    executable = shutil.which("true")
+    assert executable is not None, "true executable is required for the bundle fixture"
+    shutil.copy(executable, build / "UniFiBar")
+    return project, build
+
+
+def check_symlink_rejection(script):
+    with tempfile.TemporaryDirectory(prefix="unifibar-symlink-") as temporary:
+        root = Path(temporary)
+        project, build = make_project_fixture(root, "project")
+        marker = root / "marker.png"
+        marker.write_bytes(b"HARMLESS-MARKER")
+        image = project / "Resources/Assets.xcassets/StatusBarIcon.imageset/icon@1x.png"
+        image.unlink()
+        image.symlink_to(marker)
+        result = assemble_result(script, project, build)
+        assert result.returncode != 0, result.stdout + result.stderr
+        assert "symbolic link" in result.stderr.lower()
+        assert not (build / "UniFiBar.app/Contents/Resources/icon@1x.png").exists()
+
+    with tempfile.TemporaryDirectory(prefix="unifibar-linked-directory-") as temporary:
+        root = Path(temporary)
+        project, build = make_project_fixture(root, "project")
+        external = root / "external"
+        external.mkdir()
+        (external / "icon@1x.png").write_bytes(b"HARMLESS-MARKER")
+        (external / "icon@2x.png").write_bytes(b"HARMLESS-MARKER")
+        imageset = project / "Resources/Assets.xcassets/StatusBarIcon.imageset"
+        shutil.rmtree(imageset)
+        imageset.symlink_to(external, target_is_directory=True)
+        result = assemble_result(script, project, build)
+        assert result.returncode != 0, result.stdout + result.stderr
+        assert "symbolic link" in result.stderr.lower()
+        assert not (build / "UniFiBar.app/Contents/Resources/icon@1x.png").exists()
 
 
 def main():
@@ -93,7 +141,8 @@ def main():
         shutil.rmtree(project / "Resources")
         assemble(args.script.resolve(), project, build)
         assert not (build / "UniFiBar.app/Contents/Resources/icon@2x.png").exists()
-    print("PASS: bundle metadata, binary, icons, rebuild, spaces, and missing optional assets")
+    check_symlink_rejection(args.script.resolve())
+    print("PASS: bundle metadata, binary, icons, rebuild, spaces, missing optional assets, and symlink rejection")
 
 
 if __name__ == "__main__":

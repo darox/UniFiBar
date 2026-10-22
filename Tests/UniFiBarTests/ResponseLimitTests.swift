@@ -34,6 +34,49 @@ struct ResponseLimitTests {
         #expect(bytes.reads.withLock { $0 } == (declaredLength > 4 ? 0 : 5))
     }
 
+    private final class StubURLProtocol: URLProtocol {
+        override class func canInit(with request: URLRequest) -> Bool { true }
+        override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+        override func startLoading() {
+            guard let url = request.url, let count = Int(url.lastPathComponent) else {
+                client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+                return
+            }
+            let response = HTTPURLResponse(
+                url: url, statusCode: 200, httpVersion: nil,
+                headerFields: ["Content-Length": String(count)]
+            )!
+            let data = Data(repeating: 7, count: count)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        }
+
+        override func stopLoading() {}
+    }
+
+    @Test func productionTransportStopsAnOversizedBody() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let delegate = SameOriginRedirectDelegate()
+
+        let exact = try #require(URL(string: "https://fixture.invalid/body/4"))
+        let accepted = try await UniFiClient.boundedResponse(
+            for: URLRequest(url: exact), using: session, delegate: delegate, limit: 4
+        )
+        #expect(accepted == Data(repeating: 7, count: 4))
+
+        let oversized = try #require(URL(string: "https://fixture.invalid/body/5"))
+        await #expect(throws: URLError(.dataLengthExceedsMaximum)) {
+            try await UniFiClient.boundedResponse(
+                for: URLRequest(url: oversized), using: session, delegate: delegate, limit: 4
+            )
+        }
+    }
+
     @Test func downloadDelegateAdoptsTheFileOutOfTheSystemTempLocation() throws {
         let source = FileManager.default.temporaryDirectory
             .appendingPathComponent("unifibar-fixture-\(UUID().uuidString)")

@@ -40,6 +40,61 @@ validate_version_info() {
     fi
 }
 
+# Copy a file below the trusted project root without following symbolic links.
+# The optional fourth argument permits a missing source for build resources.
+copy_trusted_file() {
+    local root="${1:?trusted project root required}"
+    local source="${2:?source path required}"
+    local destination="${3:?destination required}"
+    local optional="${4:-false}"
+    local current component remaining relative
+
+    root="${root%/}"
+    case "$source" in
+        "$root"/*) relative="${source#"$root"/}" ;;
+        *)
+            echo "ERROR: source '$source' is outside trusted project root '$root'" >&2
+            return 1
+            ;;
+    esac
+
+    current="$root"
+    remaining="$relative"
+    while [ -n "$remaining" ]; do
+        if [[ "$remaining" == */* ]]; then
+            component="${remaining%%/*}"
+            remaining="${remaining#*/}"
+        else
+            component="$remaining"
+            remaining=""
+        fi
+        case "$component" in
+            ""|.|..)
+                echo "ERROR: invalid source path component '$component' in '$source'" >&2
+                return 1
+                ;;
+        esac
+        current="$current/$component"
+        if [[ -L "$current" ]]; then
+            echo "ERROR: refusing to copy through symbolic link '$current'" >&2
+            return 1
+        fi
+    done
+
+    if [[ ! -e "$current" && "$optional" == "true" ]]; then
+        return 0
+    fi
+    if [[ ! -f "$current" ]]; then
+        echo "ERROR: source '$source' is not a regular file" >&2
+        return 1
+    fi
+    cp -P "$current" "$destination"
+}
+
+copy_optional_trusted_file() {
+    copy_trusted_file "$1" "$2" "$3" true
+}
+
 assemble_app_bundle() {
     local APP_BUNDLE="$1"
     local BINARY="$2"
@@ -84,17 +139,21 @@ assemble_app_bundle() {
 PLIST
 
     # Copy entitlements
-    if [ -f "$PROJECT_DIR/UniFiBar.entitlements" ]; then
-        cp "$PROJECT_DIR/UniFiBar.entitlements" "$APP_BUNDLE/Contents/Resources/"
-    fi
+    copy_optional_trusted_file "$PROJECT_DIR" "$PROJECT_DIR/UniFiBar.entitlements" \
+        "$APP_BUNDLE/Contents/Resources/"
 
     # Generate .icns from app icon PNGs (if available)
     local ICON_SRC="$PROJECT_DIR/Resources/Assets.xcassets/AppIcon.appiconset"
     if [ -d "$ICON_SRC" ]; then
         local ICONSET_DIR="$BUILD_DIR/AppIcon.iconset"
+        local icon_name
         rm -rf "$ICONSET_DIR"
         mkdir -p "$ICONSET_DIR"
-        cp "$ICON_SRC"/icon_{16x16,32x32,128x128,256x256,512x512}{,@2x}.png "$ICONSET_DIR/" 2>/dev/null || true
+        for icon_name in icon_16x16.png icon_16x16@2x.png icon_32x32.png icon_32x32@2x.png \
+            icon_128x128.png icon_128x128@2x.png icon_256x256.png icon_256x256@2x.png \
+            icon_512x512.png icon_512x512@2x.png; do
+            copy_optional_trusted_file "$PROJECT_DIR" "$ICON_SRC/$icon_name" "$ICONSET_DIR/"
+        done
         iconutil -c icns "$ICONSET_DIR" -o "$APP_BUNDLE/Contents/Resources/AppIcon.icns" 2>/dev/null || true
     else
         echo "WARNING: App icon assets not found at $ICON_SRC, skipping icon generation"
@@ -103,8 +162,10 @@ PLIST
     # Copy status bar icon (if available)
     local STATUSBAR_SRC="$PROJECT_DIR/Resources/Assets.xcassets/StatusBarIcon.imageset"
     if [ -d "$STATUSBAR_SRC" ]; then
-        cp "$STATUSBAR_SRC/icon@1x.png" "$APP_BUNDLE/Contents/Resources/" 2>/dev/null || true
-        cp "$STATUSBAR_SRC/icon@2x.png" "$APP_BUNDLE/Contents/Resources/" 2>/dev/null || true
+        copy_optional_trusted_file "$PROJECT_DIR" "$STATUSBAR_SRC/icon@1x.png" \
+            "$APP_BUNDLE/Contents/Resources/"
+        copy_optional_trusted_file "$PROJECT_DIR" "$STATUSBAR_SRC/icon@2x.png" \
+            "$APP_BUNDLE/Contents/Resources/"
     else
         echo "WARNING: Status bar icon assets not found, skipping"
     fi

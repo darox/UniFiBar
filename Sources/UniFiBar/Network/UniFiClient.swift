@@ -177,8 +177,6 @@ actor UniFiClient: UniFiClientProtocol {
     }
 
     private func responseData(for req: URLRequest) async throws -> Data {
-        // Download to a temporary file: one suspension per chunk instead of one per
-        // byte, and the delegate enforces the size cap while the body streams in.
         do {
             return try await Self.boundedResponse(
                 for: req, using: session, delegate: redirectDelegate
@@ -196,24 +194,15 @@ actor UniFiClient: UniFiClientProtocol {
         delegate: URLSessionTaskDelegate, limit: Int = responseBodyLimit
     ) async throws -> Data {
         guard limit >= 0 else { throw URLError(.dataLengthExceedsMaximum) }
-        let (fileURL, response) = try await session.download(for: request, delegate: delegate)
-        defer { try? FileManager.default.removeItem(at: fileURL) }
-        try Task.checkCancellation()
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw UniFiError.httpError(statusCode: -1)
-        }
-        guard httpResponse.statusCode == 200 else {
-            throw UniFiError.httpError(statusCode: httpResponse.statusCode)
-        }
-        return try Data(contentsOf: fileURL)
+        let (bytes, response) = try await session.bytes(for: request, delegate: delegate)
+        defer { bytes.task.cancel() }
+        return try await boundedResponseData(bytes, response: response, limit: limit)
     }
 
     static let responseBodyLimit = 16 * 1_024 * 1_024
 
-    /// ponytail: 16 MiB per controller response; large sites need bounded pagination, not a larger silent cap.
-    /// Used by UpdateChecker and tests; the production path caps via CappedDownloadDelegate.
     nonisolated static func boundedResponseData<Bytes: AsyncSequence>(
-        _ bytes: Bytes, response: URLResponse, limit: Int = 16 * 1_024 * 1_024
+        _ bytes: Bytes, response: URLResponse, limit: Int = responseBodyLimit
     ) async throws -> Data where Bytes.Element == UInt8 {
         try Task.checkCancellation()
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -553,66 +542,6 @@ final class SameOriginRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendab
               target.user == nil, target.password == nil
         else { return nil }
         return request
-    }
-}
-
-/// Enforces the response body cap while a download streams, and forwards the
-/// task-level trust and redirect decisions to the shared redirect delegate.
-final class CappedDownloadDelegate: NSObject, URLSessionDownloadDelegate, Sendable {
-    let limit: Int
-    private let redirectAndTrust: SameOriginRedirectDelegate
-    private let exceeded = OSAllocatedUnfairLock(initialState: false)
-    private let adopted = OSAllocatedUnfairLock<URL?>(initialState: nil)
-
-    init(limit: Int, forwardingTo redirectAndTrust: SameOriginRedirectDelegate) {
-        self.limit = limit
-        self.redirectAndTrust = redirectAndTrust
-    }
-
-    var exceededLimit: Bool { exceeded.withLock { $0 } }
-
-    /// Non-nil once the body has been moved out of the download temp file.
-    var adoptedLocation: URL? { adopted.withLock { $0 } }
-
-    /// The system removes the temp file when `didFinishDownloadingTo` returns, so the
-    /// delegate must move it somewhere it owns before reading.
-    static func adoptDownload(at location: URL) throws -> URL {
-        let owned = FileManager.default.temporaryDirectory
-            .appendingPathComponent("unifibar-response-\(UUID().uuidString)")
-        try FileManager.default.moveItem(at: location, to: owned)
-        return owned
-    }
-
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
-                    didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
-                    totalBytesExpectedToWrite: Int64) {
-        let capped = Int64(limit)
-        // totalBytesExpectedToWrite is NSURLResponseUnknownLength (-1) when unknown.
-        let advertised = totalBytesExpectedToWrite < 0 ? 0 : totalBytesExpectedToWrite
-        guard max(advertised, totalBytesWritten) <= capped else {
-            exceeded.withLock { $0 = true }
-            downloadTask.cancel()
-            return
-        }
-    }
-
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
-                    didFinishDownloadingTo location: URL) {
-        guard let owned = try? Self.adoptDownload(at: location) else { return }
-        adopted.withLock { $0 = owned }
-    }
-
-    func urlSession(_ session: URLSession, task: URLSessionTask,
-                    didReceive challenge: URLAuthenticationChallenge) async
-        -> (URLSession.AuthChallengeDisposition, URLCredential?) {
-        await redirectAndTrust.urlSession(session, task: task, didReceive: challenge)
-    }
-
-    func urlSession(_ session: URLSession, task: URLSessionTask,
-                    willPerformHTTPRedirection response: HTTPURLResponse,
-                    newRequest request: URLRequest) async -> URLRequest? {
-        await redirectAndTrust.urlSession(session, task: task,
-                                          willPerformHTTPRedirection: response, newRequest: request)
     }
 }
 
